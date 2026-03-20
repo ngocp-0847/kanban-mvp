@@ -6,3 +6,6 @@ dist/
 sessions.db
 server/sessions.db
 .env
+server/kanban.db
+server/*.db
+server/kanban.db*

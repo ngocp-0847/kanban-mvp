@@ -19,8 +19,14 @@ import {
 
 import {
   addSSEClient, addRepo as pollerAdd, removeRepo as pollerRemove,
-  forceRefresh, getRepoState,
+  forceRefresh, getRepoState, broadcastToClients,
 } from './poller.js'
+
+import { initQueue } from './queue.js'
+import {
+  getIssuesFromDb, enqueue, getQueueStats, getRecentLog,
+  updateIssueColumn, markIssueClosed,
+} from './db.js'
 
 import {
   listRepos, addRepo as storeAdd, removeRepo as storeRemove,
@@ -121,8 +127,11 @@ app.post('/api/repos/:owner/:repo/issues', async (req, res) => {
   try {
     const { title, body } = req.body
     if (!title) return res.status(400).json({ error: 'title required' })
-    const issue = await createIssue({ ...repoParam(req), title, body })
-    res.status(201).json(issue)
+    const repoKey = `${req.params.owner}/${req.params.repo}`
+    const token = getUserToken(req)
+    const jobId = enqueue(repoKey, 'create', { title, body, _token: token }, req.session.user?.login)
+    // Optimistic placeholder shown immediately
+    res.status(202).json({ queued: true, jobId, title, column: 'todo' })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
@@ -132,21 +141,41 @@ app.get('/api/repos/:owner/:repo/issues/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.patch('/api/repos/:owner/:repo/issues/:id/move', async (req, res) => {
+app.patch('/api/repos/:owner/:repo/issues/:id/move', (req, res) => {
   try {
     const { column } = req.body
     if (!column) return res.status(400).json({ error: 'column required' })
-    const issue = await moveIssue({ ...repoParam(req), number: Number(req.params.id), toColumn: column })
-    forceRefresh(`${req.params.owner}/${req.params.repo}`)
-    res.json(issue)
+    const repoKey = `${req.params.owner}/${req.params.repo}`
+    const number = Number(req.params.id)
+    const token = getUserToken(req)
+
+    // Optimistic update in DB immediately (board shows change instantly)
+    updateIssueColumn(repoKey, number, column)
+
+    // Broadcast optimistic state
+    const issues = getIssuesFromDb(repoKey)
+    broadcastToClients(repoKey, { type: 'sync', repo: repoKey, issues })
+
+    // Enqueue actual GitHub write
+    const jobId = enqueue(repoKey, 'move', { number, column, _token: token }, req.session.user?.login)
+
+    res.json({ queued: true, jobId, number, column })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.patch('/api/repos/:owner/:repo/issues/:id/close', async (req, res) => {
+app.patch('/api/repos/:owner/:repo/issues/:id/close', (req, res) => {
   try {
-    const issue = await closeIssue({ ...repoParam(req), number: Number(req.params.id) })
-    forceRefresh(`${req.params.owner}/${req.params.repo}`)
-    res.json(issue)
+    const repoKey = `${req.params.owner}/${req.params.repo}`
+    const number = Number(req.params.id)
+    const token = getUserToken(req)
+
+    // Optimistic: remove from cache immediately
+    markIssueClosed(repoKey, number)
+    const issues = getIssuesFromDb(repoKey)
+    broadcastToClients(repoKey, { type: 'sync', repo: repoKey, issues })
+
+    const jobId = enqueue(repoKey, 'close', { number, _token: token }, req.session.user?.login)
+    res.json({ queued: true, jobId, number })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
@@ -155,23 +184,35 @@ app.get('/api/repos/:owner/:repo/issues/:id/comments', async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.post('/api/repos/:owner/:repo/issues/:id/comments', async (req, res) => {
+app.post('/api/repos/:owner/:repo/issues/:id/comments', (req, res) => {
   try {
     const { body } = req.body
     if (!body) return res.status(400).json({ error: 'body required' })
-    res.status(201).json(await postComment({ ...repoParam(req), number: Number(req.params.id), body }))
+    const repoKey = `${req.params.owner}/${req.params.repo}`
+    const number = Number(req.params.id)
+    const token = getUserToken(req)
+    const jobId = enqueue(repoKey, 'comment', { number, body, _token: token }, req.session.user?.login)
+    res.status(202).json({ queued: true, jobId })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.patch('/api/repos/:owner/:repo/issues/:id/assignees', async (req, res) => {
+app.patch('/api/repos/:owner/:repo/issues/:id/assignees', (req, res) => {
   try {
-    res.json(await updateAssignees({ ...repoParam(req), number: Number(req.params.id), assignees: req.body.assignees }))
+    const repoKey = `${req.params.owner}/${req.params.repo}`
+    const number = Number(req.params.id)
+    const token = getUserToken(req)
+    const jobId = enqueue(repoKey, 'assignees', { number, assignees: req.body.assignees, _token: token }, req.session.user?.login)
+    res.json({ queued: true, jobId })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-app.patch('/api/repos/:owner/:repo/issues/:id/labels', async (req, res) => {
+app.patch('/api/repos/:owner/:repo/issues/:id/labels', (req, res) => {
   try {
-    res.json(await updateLabels({ ...repoParam(req), number: Number(req.params.id), labels: req.body.labels }))
+    const repoKey = `${req.params.owner}/${req.params.repo}`
+    const number = Number(req.params.id)
+    const token = getUserToken(req)
+    const jobId = enqueue(repoKey, 'labels', { number, labels: req.body.labels, _token: token }, req.session.user?.login)
+    res.json({ queued: true, jobId })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
@@ -185,12 +226,25 @@ app.get('/api/repos/:owner/:repo/labels', async (req, res) => {
   catch (err) { res.status(500).json({ error: err.message }) }
 })
 
+// ── Queue status / log endpoints ──────────────────────────────────────────────
+app.get('/api/repos/:owner/:repo/queue', requireAuth, (req, res) => {
+  const repoKey = `${req.params.owner}/${req.params.repo}`
+  res.json({
+    stats: getQueueStats(repoKey),
+    recent: getRecentLog(repoKey, 30),
+  })
+})
+
 // ── Start ──────────────────────────────────────────────────────────────────────
 async function start() {
   if (!process.env.GITHUB_TOKEN) {
     console.error('[server] GITHUB_TOKEN missing in .env (used for polling/label creation)')
     process.exit(1)
   }
+
+  // Init sync queue worker (passes broadcast fn so it can push SSE on job completion)
+  initQueue(broadcastToClients)
+
   const repos = listRepos()
   console.log(`[server] Starting with ${repos.length} repo(s)`)
   for (const { owner, repo } of repos) {

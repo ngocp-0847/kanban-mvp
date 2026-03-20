@@ -9,6 +9,7 @@
     "install:all": "npm install && cd client && npm install"
   },
   "dependencies": {
+    "better-sqlite3": "^12.8.0",
     "concurrently": "^8.2.0",
     "connect-sqlite3": "^0.9.16",
     "cors": "^2.8.5",

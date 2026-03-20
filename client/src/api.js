@@ -141,10 +141,30 @@ export async function getRepoLabels(owner, repo) {
 // ── SSE ──────────────────────────────────────────────────────────────────────
 export function subscribeToEvents(onMessage, repoKey = null) {
   const url = repoKey ? `/api/events?repo=${encodeURIComponent(repoKey)}` : '/api/events'
-  const es = new EventSource(url)
-  es.onmessage = (e) => {
-    try { onMessage(JSON.parse(e.data)) } catch (_) {}
+
+  let es
+  let reconnectTimer
+
+  function connect() {
+    es = new EventSource(url, { withCredentials: true })
+    es.onmessage = (e) => {
+      try { onMessage(JSON.parse(e.data)) } catch (_) {}
+    }
+    es.onerror = () => {
+      es.close()
+      reconnectTimer = setTimeout(connect, 3000) // auto-reconnect
+    }
   }
-  es.onerror = () => console.warn('[SSE] connection error')
-  return () => es.close()
+
+  connect()
+  return () => {
+    clearTimeout(reconnectTimer)
+    es?.close()
+  }
+}
+
+export async function getQueueStatus(owner, repo) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/queue`, { credentials: 'include' })
+  if (!res.ok) return null
+  return res.json()
 }

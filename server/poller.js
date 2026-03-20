@@ -1,31 +1,41 @@
+/**
+ * poller.js — Polls GitHub every POLL_INTERVAL, updates SQLite cache, broadcasts SSE.
+ *
+ * On startup: serve cached data instantly from DB (zero latency).
+ * In background: poll GitHub to detect external changes (merged PRs, web edits etc.)
+ */
+
 import { fetchIssues, normalizeIssue } from './github.js'
+import { upsertIssues, getIssuesFromDb } from './db.js'
 
 const POLL_INTERVAL = 30_000
 
-// repoKey = "owner/repo"
-const repoStates = new Map()   // repoKey → normalized[]
-const repoClients = new Map()  // repoKey → Set<res>
-let allClients = new Set()     // SSE clients subscribed to all repos
+let clients = new Set()     // all SSE clients
+const repoClients = new Map() // repoKey → Set<res>
+const pollTimers = new Map()  // repoKey → intervalId
 
 // ── SSE client management ────────────────────────────────────────────────────
 export function addSSEClient(res, repoKey = null) {
+  clients.add(res)
   if (repoKey) {
     if (!repoClients.has(repoKey)) repoClients.set(repoKey, new Set())
     repoClients.get(repoKey).add(res)
-    // Send current state immediately
-    const state = repoStates.get(repoKey)
-    if (state) send(res, { type: 'sync', repo: repoKey, issues: state })
+  }
+
+  // Send current cached state immediately (from DB — instant)
+  if (repoKey) {
+    const issues = getIssuesFromDb(repoKey)
+    send(res, { type: 'sync', repo: repoKey, issues })
   } else {
-    allClients.add(res)
-    // Send all known states
-    for (const [rk, issues] of repoStates) {
+    for (const rk of pollTimers.keys()) {
+      const issues = getIssuesFromDb(rk)
       send(res, { type: 'sync', repo: rk, issues })
     }
   }
 
   res.on('close', () => {
-    allClients.delete(res)
-    for (const clients of repoClients.values()) clients.delete(res)
+    clients.delete(res)
+    for (const set of repoClients.values()) set.delete(res)
   })
 }
 
@@ -33,11 +43,9 @@ function send(res, event) {
   try { res.write(`data: ${JSON.stringify(event)}\n\n`) } catch (_) {}
 }
 
-function broadcast(repoKey, event) {
+export function broadcast(repoKey, event) {
   const data = JSON.stringify(event)
-  allClients.forEach(c => { try { c.write(`data: ${data}\n\n`) } catch (_) {} })
-  const specific = repoClients.get(repoKey)
-  if (specific) specific.forEach(c => { try { c.write(`data: ${data}\n\n`) } catch (_) {} })
+  clients.forEach(c => { try { c.write(`data: ${data}\n\n`) } catch (_) {} })
 }
 
 // ── Poll one repo ─────────────────────────────────────────────────────────────
@@ -46,13 +54,13 @@ async function pollRepo(repoKey) {
   try {
     const raw = await fetchIssues({ owner, repo })
     const normalized = raw.map(normalizeIssue)
-    const prev = JSON.stringify(repoStates.get(repoKey) || [])
-    const next = JSON.stringify(normalized)
-    if (prev !== next) {
-      console.log(`[poller] ${repoKey} changed → ${normalized.length} issues`)
-      repoStates.set(repoKey, normalized)
-      broadcast(repoKey, { type: 'sync', repo: repoKey, issues: normalized })
-    }
+
+    // Upsert into SQLite
+    upsertIssues(repoKey, normalized)
+
+    // Broadcast fresh list
+    broadcast(repoKey, { type: 'sync', repo: repoKey, issues: normalized })
+    console.log(`[poller] ${repoKey}: ${normalized.length} issues`)
   } catch (err) {
     console.error(`[poller] ${repoKey} error:`, err.message)
     broadcast(repoKey, { type: 'error', repo: repoKey, message: err.message })
@@ -60,32 +68,29 @@ async function pollRepo(repoKey) {
 }
 
 // ── Repo registry ─────────────────────────────────────────────────────────────
-const pollTimers = new Map()   // repoKey → intervalId
-
 export function addRepo(repoKey) {
-  if (pollTimers.has(repoKey)) return // already polling
-  console.log(`[poller] Adding repo: ${repoKey}`)
-  pollRepo(repoKey) // immediate first poll
+  if (pollTimers.has(repoKey)) return
+  console.log(`[poller] Adding: ${repoKey}`)
+  pollRepo(repoKey) // immediate poll in background
   pollTimers.set(repoKey, setInterval(() => pollRepo(repoKey), POLL_INTERVAL))
 }
 
 export function removeRepo(repoKey) {
-  const timer = pollTimers.get(repoKey)
-  if (timer) clearInterval(timer)
+  const t = pollTimers.get(repoKey)
+  if (t) clearInterval(t)
   pollTimers.delete(repoKey)
-  repoStates.delete(repoKey)
   repoClients.delete(repoKey)
-  console.log(`[poller] Removed repo: ${repoKey}`)
+  console.log(`[poller] Removed: ${repoKey}`)
 }
 
-export function forceRefresh(repoKey) {
-  return pollRepo(repoKey)
+export async function forceRefresh(repoKey) {
+  await pollRepo(repoKey)
 }
 
+// Used by queue to broadcast updates
+export { broadcast as broadcastToClients }
+
+// Used by server to serve cached issues (instant, no GitHub call)
 export function getRepoState(repoKey) {
-  return repoStates.get(repoKey) || []
-}
-
-export function getActiveRepos() {
-  return [...pollTimers.keys()]
+  return getIssuesFromDb(repoKey)
 }

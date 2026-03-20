@@ -529,3 +529,31 @@ body {
   background: rgba(220,38,38,0.7);
   border-color: transparent; color: white;
 }
+
+/* ── Queue Indicator ────────────────────────────────────────────────────── */
+.queue-indicator {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 0.75rem; padding: 2px 8px;
+  border-radius: 999px; font-weight: 500;
+}
+.queue-indicator--syncing {
+  background: #eff6ff; color: #2563eb;
+  border: 1px solid #bfdbfe;
+}
+.queue-indicator--done {
+  background: #f0fdf4; color: #16a34a;
+  border: 1px solid #bbf7d0;
+}
+.queue-indicator--error {
+  background: #fef2f2; color: #dc2626;
+  border: 1px solid #fecaca;
+}
+.queue-dot {
+  width: 6px; height: 6px;
+  background: #2563eb; border-radius: 50%;
+  animation: pulse 1s infinite;
+}
+@keyframes pulse {
+  0%,100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.3); }
+}
