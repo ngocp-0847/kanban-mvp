@@ -115,6 +115,76 @@ export async function closeIssue(issueNumber) {
   return res.json()
 }
 
+// Fetch full issue detail (body + labels + assignees)
+export async function fetchIssueDetail(issueNumber) {
+  const res = await fetch(
+    `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issueNumber}`,
+    { headers: headers() }
+  )
+  if (!res.ok) throw new Error(`Fetch issue failed: ${res.status}`)
+  return res.json()
+}
+
+// Fetch comments for an issue
+export async function fetchComments(issueNumber) {
+  const res = await fetch(
+    `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issueNumber}/comments?per_page=50`,
+    { headers: headers() }
+  )
+  if (!res.ok) throw new Error(`Fetch comments failed: ${res.status}`)
+  return res.json()
+}
+
+// Post a comment
+export async function postComment(issueNumber, body) {
+  const res = await fetch(
+    `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issueNumber}/comments`,
+    { method: 'POST', headers: headers(), body: JSON.stringify({ body }) }
+  )
+  if (!res.ok) throw new Error(`Post comment failed: ${res.status}`)
+  return res.json()
+}
+
+// Fetch repo collaborators (for assignee dropdown)
+export async function fetchCollaborators() {
+  const res = await fetch(
+    `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/collaborators?per_page=50`,
+    { headers: headers() }
+  )
+  if (!res.ok) return [] // 404 if no push access — return empty
+  return res.json()
+}
+
+// Update assignees
+export async function updateAssignees(issueNumber, assignees) {
+  const res = await fetch(
+    `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issueNumber}`,
+    { method: 'PATCH', headers: headers(), body: JSON.stringify({ assignees }) }
+  )
+  if (!res.ok) throw new Error(`Update assignees failed: ${res.status}`)
+  return res.json()
+}
+
+// Update labels (non-kanban ones preserved, kanban ones managed separately)
+export async function updateLabels(issueNumber, labels) {
+  const res = await fetch(
+    `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issueNumber}`,
+    { method: 'PATCH', headers: headers(), body: JSON.stringify({ labels }) }
+  )
+  if (!res.ok) throw new Error(`Update labels failed: ${res.status}`)
+  return res.json()
+}
+
+// Fetch all repo labels
+export async function fetchRepoLabels() {
+  const res = await fetch(
+    `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/labels?per_page=100`,
+    { headers: headers() }
+  )
+  if (!res.ok) return []
+  return res.json()
+}
+
 // Detect which column an issue belongs to
 export function getIssueColumn(issue) {
   const labels = issue.labels.map(l => l.name)

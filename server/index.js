@@ -1,7 +1,11 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
-import { createIssue, moveIssue, closeIssue, ensureLabels } from './github.js'
+import {
+  createIssue, moveIssue, closeIssue, ensureLabels,
+  fetchIssueDetail, fetchComments, postComment,
+  fetchCollaborators, updateAssignees, updateLabels, fetchRepoLabels
+} from './github.js'
 import { startPoller, addSSEClient, getCurrentState } from './poller.js'
 
 const app = express()
@@ -59,6 +63,56 @@ app.patch('/api/issues/:id/move', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
+})
+
+// ── Issue detail ─────────────────────────────────────────────────────────────
+app.get('/api/issues/:id', async (req, res) => {
+  try {
+    const issue = await fetchIssueDetail(Number(req.params.id))
+    res.json(issue)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.get('/api/issues/:id/comments', async (req, res) => {
+  try {
+    const comments = await fetchComments(Number(req.params.id))
+    res.json(comments)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.post('/api/issues/:id/comments', async (req, res) => {
+  try {
+    const { body } = req.body
+    if (!body) return res.status(400).json({ error: 'body required' })
+    const comment = await postComment(Number(req.params.id), body)
+    res.status(201).json(comment)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.patch('/api/issues/:id/assignees', async (req, res) => {
+  try {
+    const { assignees } = req.body
+    const issue = await updateAssignees(Number(req.params.id), assignees)
+    res.json(issue)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.patch('/api/issues/:id/labels', async (req, res) => {
+  try {
+    const { labels } = req.body
+    const issue = await updateLabels(Number(req.params.id), labels)
+    res.json(issue)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.get('/api/collaborators', async (req, res) => {
+  try { res.json(await fetchCollaborators()) }
+  catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.get('/api/labels', async (req, res) => {
+  try { res.json(await fetchRepoLabels()) }
+  catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 app.patch('/api/issues/:id/close', async (req, res) => {

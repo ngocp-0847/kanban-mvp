@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { DragDropContext } from '@hello-pangea/dnd'
 import Column from './Column'
+import IssueDetail from './IssueDetail'
 import { getIssues, createIssue, moveIssue, closeIssue, subscribeToEvents } from './api'
 
 const COLUMNS = ['todo', 'in-progress', 'done']
@@ -10,6 +11,7 @@ export default function Board() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [lastSync, setLastSync] = useState(null)
+  const [detailId, setDetailId] = useState(null)
 
   const loadIssues = useCallback(async () => {
     try {
@@ -104,10 +106,16 @@ export default function Board() {
               issues={issuesByColumn(col)}
               onClose={handleClose}
               onAddCard={handleAddCard}
+              onOpenDetail={setDetailId}
             />
           ))}
         </div>
       </DragDropContext>
+
+      <IssueDetail
+        issueId={detailId}
+        onClose={() => setDetailId(null)}
+      />
     </div>
   )
 }

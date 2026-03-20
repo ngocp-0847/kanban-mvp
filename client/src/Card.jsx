@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { Draggable } from '@hello-pangea/dnd'
 
-export default function Card({ issue, index, onClose }) {
+export default function Card({ issue, index, onClose, onOpenDetail }) {
   const [confirming, setConfirming] = useState(false)
 
   return (
@@ -19,23 +19,26 @@ export default function Card({ issue, index, onClose }) {
               <button
                 className="card__close-btn"
                 title="Close issue"
-                onClick={() => setConfirming(true)}
+                onClick={(e) => { e.stopPropagation(); setConfirming(true) }}
               >
                 ×
               </button>
             ) : (
               <div className="card__confirm">
-                <button onClick={() => { setConfirming(false); onClose(issue.id) }}>✓ Close</button>
-                <button onClick={() => setConfirming(false)}>✗</button>
+                <button onClick={(e) => { e.stopPropagation(); setConfirming(false); onClose(issue.id) }}>✓ Close</button>
+                <button onClick={(e) => { e.stopPropagation(); setConfirming(false) }}>✗</button>
               </div>
             )}
           </div>
-          <div className="card__title">
-            <a href={issue.url} target="_blank" rel="noreferrer">{issue.title}</a>
+          <div className="card__title" onClick={() => onOpenDetail && onOpenDetail(issue.id)}>
+            {issue.title}
           </div>
-          {issue.user && (
-            <div className="card__meta">@{issue.user}</div>
-          )}
+          <div className="card__footer">
+            {issue.labels?.filter(l => !['kanban:todo','kanban:in-progress','kanban:done'].includes(l)).map(l => (
+              <span key={l} className="card__label">{l}</span>
+            ))}
+            {issue.user && <span className="card__meta">@{issue.user}</span>}
+          </div>
         </div>
       )}
     </Draggable>

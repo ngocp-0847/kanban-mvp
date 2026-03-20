@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { Droppable } from '@hello-pangea/dnd'
 import Card from './Card'
 
-export default function Column({ column, issues, onClose, onAddCard }) {
+export default function Column({ column, issues, onClose, onAddCard, onOpenDetail }) {
   const [adding, setAdding] = useState(false)
   const [title, setTitle] = useState('')
 
@@ -40,6 +40,7 @@ export default function Column({ column, issues, onClose, onAddCard }) {
                 issue={issue}
                 index={index}
                 onClose={onClose}
+                onOpenDetail={onOpenDetail}
               />
             ))}
             {provided.placeholder}
