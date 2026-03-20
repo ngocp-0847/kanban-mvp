@@ -46,7 +46,7 @@ function MarkdownBody({ source }) {
 
 const KANBAN_LABELS = ['kanban:todo', 'kanban:in-progress', 'kanban:done']
 
-export default function IssueDetail({ issueId, onClose, onMoved }) {
+export default function IssueDetail({ owner, repo, issueId, onClose }) {
   const [issue, setIssue] = useState(null)
   const [comments, setComments] = useState([])
   const [collaborators, setCollaborators] = useState([])
@@ -59,11 +59,12 @@ export default function IssueDetail({ issueId, onClose, onMoved }) {
   useEffect(() => {
     if (!issueId) return
     setLoading(true)
+    setActiveTab('detail')
     Promise.all([
-      getIssueDetail(issueId),
-      getComments(issueId),
-      getCollaborators(),
-      getRepoLabels(),
+      getIssueDetail(owner, repo, issueId),
+      getComments(owner, repo, issueId),
+      getCollaborators(owner, repo),
+      getRepoLabels(owner, repo),
     ]).then(([iss, cmts, colabs, labels]) => {
       setIssue(iss)
       setComments(cmts)
@@ -77,7 +78,7 @@ export default function IssueDetail({ issueId, onClose, onMoved }) {
     if (!commentDraft.trim()) return
     setPosting(true)
     try {
-      const c = await postComment(issueId, commentDraft)
+      const c = await postComment(owner, repo, issueId, commentDraft)
       setComments(prev => [...prev, c])
       setCommentDraft('')
     } finally { setPosting(false) }
@@ -88,7 +89,7 @@ export default function IssueDetail({ issueId, onClose, onMoved }) {
     const next = current.includes(login)
       ? current.filter(l => l !== login)
       : [...current, login]
-    const updated = await updateAssignees(issueId, next)
+    const updated = await updateAssignees(owner, repo, issueId, next)
     setIssue(updated)
   }
 
@@ -97,7 +98,7 @@ export default function IssueDetail({ issueId, onClose, onMoved }) {
     const next = current.includes(labelName)
       ? current.filter(n => n !== labelName)
       : [...current, labelName]
-    const updated = await updateLabels(issueId, next)
+    const updated = await updateLabels(owner, repo, issueId, next)
     setIssue(updated)
   }
 
