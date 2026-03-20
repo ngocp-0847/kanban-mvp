@@ -163,6 +163,36 @@ export function subscribeToEvents(onMessage, repoKey = null) {
   }
 }
 
+// ── Issue edit + history ─────────────────────────────────────────────────────
+
+export async function updateIssue(owner, repo, id, title, body) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${id}`, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, body }),
+  })
+  if (!res.ok) throw new Error('Failed to update issue')
+  return res.json()
+}
+
+export async function getIssueHistory(owner, repo, id) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${id}/history`, {
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error('Failed to fetch history')
+  return res.json()
+}
+
+export async function revertIssue(owner, repo, id, version) {
+  const res = await fetch(
+    `${BASE}/repos/${owner}/${repo}/issues/${id}/history/${version}/revert`,
+    { method: 'POST', credentials: 'include' }
+  )
+  if (!res.ok) throw new Error('Failed to revert')
+  return res.json()
+}
+
 export async function getQueueStatus(owner, repo) {
   const res = await fetch(`${BASE}/repos/${owner}/${repo}/queue`, { credentials: 'include' })
   if (!res.ok) return null

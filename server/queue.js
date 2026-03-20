@@ -12,11 +12,13 @@
 import {
   getPendingJobs, markJobProcessing, markJobDone, markJobFailed,
   updateIssueColumn, markIssueClosed, upsertIssues, insertIssue,
+  snapshotIssue, getDb,
 } from './db.js'
 
 import {
   moveIssue, closeIssue, createIssue, postComment,
-  updateAssignees, updateLabels, fetchIssues, normalizeIssue,
+  updateAssignees, updateLabels, updateIssue,
+  fetchIssues, normalizeIssue,
 } from './github.js'
 
 const TICK_MS = 800          // poll queue every 800ms
@@ -88,6 +90,21 @@ async function processJob(job) {
       }
       case 'labels': {
         result = await updateLabels({ ...repoCtx, number: payload.number, labels: payload.labels })
+        break
+      }
+      case 'update': {
+        // Snapshot BEFORE applying (history already saved by server route)
+        result = await updateIssue({
+          ...repoCtx,
+          number: payload.number,
+          title: payload.title,
+          body: payload.body,
+        })
+        // Update local cache
+        getDb().prepare(`
+          UPDATE issues SET title = ?, body = ?, updated_at = datetime('now')
+          WHERE repo_key = ? AND number = ?
+        `).run(payload.title, payload.body ?? '', job.repo_key, payload.number)
         break
       }
       default:

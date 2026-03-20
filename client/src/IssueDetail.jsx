@@ -4,8 +4,9 @@ import mermaid from 'mermaid'
 import {
   getIssueDetail, getComments, postComment,
   getCollaborators, getRepoLabels,
-  updateAssignees, updateLabels,
+  updateAssignees, updateLabels, updateIssue,
 } from './api'
+import IssueHistory from './IssueHistory'
 
 // Configure marked
 marked.setOptions({ breaks: true, gfm: true })
@@ -54,7 +55,12 @@ export default function IssueDetail({ owner, repo, issueId, onClose }) {
   const [loading, setLoading] = useState(true)
   const [commentDraft, setCommentDraft] = useState('')
   const [posting, setPosting] = useState(false)
-  const [activeTab, setActiveTab] = useState('detail') // detail | comments
+  const [activeTab, setActiveTab] = useState('detail') // detail | comments | history
+  const [editing, setEditing] = useState(false)
+  const [editTitle, setEditTitle] = useState('')
+  const [editBody, setEditBody] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(null)
 
   useEffect(() => {
     if (!issueId) return
@@ -82,6 +88,38 @@ export default function IssueDetail({ owner, repo, issueId, onClose }) {
       setComments(prev => [...prev, c])
       setCommentDraft('')
     } finally { setPosting(false) }
+  }
+
+  const startEdit = () => {
+    setEditTitle(issue.title)
+    setEditBody(issue.body || '')
+    setSaveError(null)
+    setEditing(true)
+  }
+
+  const cancelEdit = () => {
+    setEditing(false)
+    setSaveError(null)
+  }
+
+  const handleSave = async () => {
+    if (!editTitle.trim()) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      await updateIssue(owner, repo, issueId, editTitle.trim(), editBody)
+      setIssue(prev => ({ ...prev, title: editTitle.trim(), body: editBody }))
+      setEditing(false)
+    } catch (err) {
+      setSaveError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleReverted = (ver) => {
+    setIssue(prev => ({ ...prev, title: ver.title, body: ver.body }))
+    setActiveTab('detail')
   }
 
   const handleToggleAssignee = async (login) => {
@@ -126,17 +164,45 @@ export default function IssueDetail({ owner, repo, issueId, onClose }) {
           <div className="detail-loading">Failed to load issue.</div>
         ) : (
           <>
-            <h2 className="detail-title">{issue.title}</h2>
+            {/* Title — inline edit */}
+            {editing ? (
+              <div className="detail-edit-title">
+                <input
+                  className="detail-edit-title__input"
+                  value={editTitle}
+                  onChange={e => setEditTitle(e.target.value)}
+                  autoFocus
+                />
+                <div className="detail-edit-actions">
+                  <button className="btn btn--primary btn--sm" onClick={handleSave} disabled={saving}>
+                    {saving ? 'Saving…' : '✓ Save'}
+                  </button>
+                  <button className="btn btn--sm" onClick={cancelEdit}>✕ Cancel</button>
+                </div>
+                {saveError && <div className="detail-save-error">⚠ {saveError}</div>}
+              </div>
+            ) : (
+              <div className="detail-title-row">
+                <h2 className="detail-title">{issue.title}</h2>
+                <button className="detail-edit-btn" onClick={startEdit} title="Edit title & body">
+                  ✎ Edit
+                </button>
+              </div>
+            )}
 
             {/* Tabs */}
             <div className="detail-tabs">
-              {['detail', 'comments'].map(t => (
+              {[
+                { key: 'detail',   label: '📄 Detail' },
+                { key: 'comments', label: `💬 Comments (${comments.length})` },
+                { key: 'history',  label: '🕒 History' },
+              ].map(({ key, label }) => (
                 <button
-                  key={t}
-                  className={`detail-tab${activeTab === t ? ' detail-tab--active' : ''}`}
-                  onClick={() => setActiveTab(t)}
+                  key={key}
+                  className={`detail-tab${activeTab === key ? ' detail-tab--active' : ''}`}
+                  onClick={() => setActiveTab(key)}
                 >
-                  {t === 'detail' ? '📄 Detail' : `💬 Comments (${comments.length})`}
+                  {label}
                 </button>
               ))}
             </div>
@@ -146,10 +212,19 @@ export default function IssueDetail({ owner, repo, issueId, onClose }) {
                 {/* Description */}
                 <section className="detail-section">
                   <h3 className="detail-section__title">Description</h3>
-                  {issue.body
-                    ? <MarkdownBody source={issue.body} />
-                    : <p className="detail-empty">No description provided.</p>
-                  }
+                  {editing ? (
+                    <textarea
+                      className="detail-edit-body"
+                      value={editBody}
+                      onChange={e => setEditBody(e.target.value)}
+                      rows={10}
+                      placeholder="Describe this issue… (Markdown supported)"
+                    />
+                  ) : issue.body ? (
+                    <MarkdownBody source={issue.body} />
+                  ) : (
+                    <p className="detail-empty">No description provided.</p>
+                  )}
                 </section>
 
                 {/* Assignees */}
@@ -214,6 +289,17 @@ export default function IssueDetail({ owner, repo, issueId, onClose }) {
                   </div>
                 </section>
               </div>
+            )}
+
+            {activeTab === 'history' && (
+              <IssueHistory
+                owner={owner}
+                repo={repo}
+                issueId={issueId}
+                currentTitle={issue.title}
+                currentBody={issue.body || ''}
+                onRevert={handleReverted}
+              />
             )}
 
             {activeTab === 'comments' && (

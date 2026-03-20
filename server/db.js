@@ -63,6 +63,21 @@ function migrate(db) {
 
     CREATE INDEX IF NOT EXISTS idx_queue_status ON sync_queue(status, created_at);
 
+    -- Issue edit history — snapshot before every title/body edit
+    CREATE TABLE IF NOT EXISTS issue_history (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      repo_key      TEXT NOT NULL,
+      number        INTEGER NOT NULL,
+      version       INTEGER NOT NULL,       -- 1-based, auto-incremented per issue
+      title         TEXT NOT NULL,
+      body          TEXT DEFAULT '',
+      edited_by     TEXT,                   -- GitHub login of editor
+      edited_at     TEXT DEFAULT (datetime('now')),
+      revert_of     INTEGER                 -- id this revert was sourced from (NULL = original edit)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_history_issue ON issue_history(repo_key, number, version);
+
     -- Sync log — completed operations (for audit / debug)
     CREATE TABLE IF NOT EXISTS sync_log (
       id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,6 +250,46 @@ export function getQueueStats(repoKey = null) {
     FROM sync_queue ${where}
     GROUP BY status
   `).all(...args)
+}
+
+// ── Issue history ──────────────────────────────────────────────────────────────
+
+/**
+ * Snapshot current title/body BEFORE applying an edit.
+ * Auto-increments version number per (repo_key, number).
+ */
+export function snapshotIssue(repoKey, number, { title, body, editedBy, revertOf = null }) {
+  const db = getDb()
+  const { maxVer } = db.prepare(`
+    SELECT COALESCE(MAX(version), 0) as maxVer
+    FROM issue_history
+    WHERE repo_key = ? AND number = ?
+  `).get(repoKey, number)
+
+  const version = maxVer + 1
+  db.prepare(`
+    INSERT INTO issue_history (repo_key, number, version, title, body, edited_by, revert_of)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(repoKey, number, version, title, body || '', editedBy || null, revertOf)
+
+  return version
+}
+
+/** Get full history for an issue, newest first */
+export function getIssueHistory(repoKey, number) {
+  return getDb().prepare(`
+    SELECT * FROM issue_history
+    WHERE repo_key = ? AND number = ?
+    ORDER BY version DESC
+  `).all(repoKey, number)
+}
+
+/** Get one specific version */
+export function getHistoryVersion(repoKey, number, version) {
+  return getDb().prepare(`
+    SELECT * FROM issue_history
+    WHERE repo_key = ? AND number = ? AND version = ?
+  `).get(repoKey, number, version)
 }
 
 export function getRecentLog(repoKey, limit = 20) {

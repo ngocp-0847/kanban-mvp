@@ -26,6 +26,7 @@ import { initQueue } from './queue.js'
 import {
   getIssuesFromDb, enqueue, getQueueStats, getRecentLog,
   updateIssueColumn, markIssueClosed,
+  snapshotIssue, getIssueHistory, getHistoryVersion, getDb,
 } from './db.js'
 
 import {
@@ -224,6 +225,116 @@ app.get('/api/repos/:owner/:repo/collaborators', async (req, res) => {
 app.get('/api/repos/:owner/:repo/labels', async (req, res) => {
   try { res.json(await fetchRepoLabels(repoParam(req))) }
   catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ── Issue edit + history ──────────────────────────────────────────────────────
+
+/**
+ * PATCH /api/repos/:owner/:repo/issues/:id
+ * Body: { title, body }
+ * 1. Snapshot current version to history
+ * 2. Update cache optimistically
+ * 3. Enqueue GitHub write
+ */
+app.patch('/api/repos/:owner/:repo/issues/:id', (req, res) => {
+  try {
+    const { title, body } = req.body
+    if (!title) return res.status(400).json({ error: 'title required' })
+
+    const repoKey = `${req.params.owner}/${req.params.repo}`
+    const number = Number(req.params.id)
+    const token = getUserToken(req)
+    const userLogin = req.session.user?.login
+
+    // Get current state from DB for snapshot
+    const current = getDb().prepare(
+      'SELECT title, body FROM issues WHERE repo_key = ? AND number = ?'
+    ).get(repoKey, number)
+
+    // Snapshot CURRENT version before overwriting
+    const version = snapshotIssue(repoKey, number, {
+      title: current?.title || title,
+      body: current?.body || '',
+      editedBy: userLogin,
+    })
+
+    // Optimistic DB update
+    getDb().prepare(
+      `UPDATE issues SET title = ?, body = ?, updated_at = datetime('now') WHERE repo_key = ? AND number = ?`
+    ).run(title, body ?? '', repoKey, number)
+
+    // Broadcast optimistic
+    const issues = getIssuesFromDb(repoKey)
+    broadcastToClients(repoKey, { type: 'sync', repo: repoKey, issues })
+
+    // Enqueue GitHub write
+    const jobId = enqueue(repoKey, 'update', { number, title, body, _token: token }, userLogin)
+
+    res.json({ queued: true, jobId, version })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+/**
+ * GET /api/repos/:owner/:repo/issues/:id/history
+ * Returns version list (newest first), without full body (use /history/:ver for diff)
+ */
+app.get('/api/repos/:owner/:repo/issues/:id/history', requireAuth, (req, res) => {
+  const repoKey = `${req.params.owner}/${req.params.repo}`
+  const number = Number(req.params.id)
+  const history = getIssueHistory(repoKey, number)
+  res.json(history)
+})
+
+/**
+ * POST /api/repos/:owner/:repo/issues/:id/history/:version/revert
+ * Reverts to a specific version (creates new edit, snapshots current first)
+ */
+app.post('/api/repos/:owner/:repo/issues/:id/history/:version/revert', (req, res) => {
+  try {
+    const repoKey = `${req.params.owner}/${req.params.repo}`
+    const number = Number(req.params.id)
+    const targetVersion = Number(req.params.version)
+    const token = getUserToken(req)
+    const userLogin = req.session.user?.login
+
+    // Find target version
+    const target = getHistoryVersion(repoKey, number, targetVersion)
+    if (!target) return res.status(404).json({ error: `Version ${targetVersion} not found` })
+
+    // Snapshot current state before reverting
+    const current = getDb().prepare(
+      'SELECT title, body FROM issues WHERE repo_key = ? AND number = ?'
+    ).get(repoKey, number)
+
+    snapshotIssue(repoKey, number, {
+      title: current?.title || '',
+      body: current?.body || '',
+      editedBy: userLogin,
+    })
+
+    // Save new snapshot flagged as revert
+    const newVersion = snapshotIssue(repoKey, number, {
+      title: target.title,
+      body: target.body,
+      editedBy: userLogin,
+      revertOf: target.id,
+    })
+
+    // Optimistic cache update
+    getDb().prepare(
+      `UPDATE issues SET title = ?, body = ?, updated_at = datetime('now') WHERE repo_key = ? AND number = ?`
+    ).run(target.title, target.body, repoKey, number)
+
+    const issues = getIssuesFromDb(repoKey)
+    broadcastToClients(repoKey, { type: 'sync', repo: repoKey, issues })
+
+    // Enqueue GitHub write
+    const jobId = enqueue(repoKey, 'update', {
+      number, title: target.title, body: target.body, _token: token,
+    }, userLogin)
+
+    res.json({ queued: true, jobId, revertedTo: targetVersion, newVersion })
+  } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
 // ── Queue status / log endpoints ──────────────────────────────────────────────

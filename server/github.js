@@ -105,6 +105,15 @@ export async function fetchComments({ owner, repo, number, token }) {
   return res.json()
 }
 
+export async function updateIssue({ owner, repo, number, title, body, token }) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, {
+    method: 'PATCH', headers: headers(token),
+    body: JSON.stringify({ title, body }),
+  })
+  if (!res.ok) throw new Error(`Update issue failed: ${res.status}`)
+  return res.json()
+}
+
 export async function postComment({ owner, repo, number, body, token }) {
   const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}/comments`, {
     method: 'POST', headers: headers(token), body: JSON.stringify({ body }),
