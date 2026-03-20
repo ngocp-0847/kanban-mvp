@@ -38,22 +38,23 @@ export async function ensureLabels() {
   }
 }
 
-// Fetch all open issues with any kanban label
+// Fetch all open issues — with OR without kanban labels
+// Issues without kanban labels are treated as "todo"
 export async function fetchIssues() {
+  let page = 1
   const results = []
-  for (const label of KANBAN_LABELS) {
+  while (true) {
     const res = await fetch(
-      `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=${encodeURIComponent(label)}&state=open&per_page=100`,
+      `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?state=open&per_page=100&page=${page}`,
       { headers: headers() }
     )
     if (!res.ok) throw new Error(`GitHub API error: ${res.status}`)
     const issues = await res.json()
-    for (const issue of issues) {
-      // Avoid duplicates (issue with multiple kanban labels)
-      if (!results.find(i => i.number === issue.number)) {
-        results.push(issue)
-      }
-    }
+    if (!issues.length) break
+    // Exclude pull requests (GitHub returns PRs in issues endpoint)
+    results.push(...issues.filter(i => !i.pull_request))
+    if (issues.length < 100) break
+    page++
   }
   return results
 }
@@ -186,10 +187,10 @@ export async function fetchRepoLabels() {
 }
 
 // Detect which column an issue belongs to
+// Issues without kanban labels default to "todo"
 export function getIssueColumn(issue) {
   const labels = issue.labels.map(l => l.name)
   if (labels.includes('kanban:done')) return 'done'
   if (labels.includes('kanban:in-progress')) return 'in-progress'
-  if (labels.includes('kanban:todo')) return 'todo'
-  return 'todo' // default
+  return 'todo' // kanban:todo or no kanban label → todo
 }
