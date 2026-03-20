@@ -6,7 +6,10 @@
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "server": "node server/index.js",
     "client": "cd client && npx vite",
-    "install:all": "npm install && cd client && npm install"
+    "install:all": "npm install && cd client && npm install",
+    "test:e2e": "npx playwright test --config=playwright.config.cjs",
+    "test:e2e:ui": "npx playwright test --ui",
+    "test:e2e:report": "npx playwright show-report tests/e2e/report"
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
