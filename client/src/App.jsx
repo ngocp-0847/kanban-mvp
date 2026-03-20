@@ -1,31 +1,56 @@
 import React, { useEffect, useState } from 'react'
 import Board from './Board'
 import RepoSelector from './RepoSelector'
-import { getRepos, removeRepo } from './api'
+import LoginPage from './LoginPage'
+import { getRepos, removeRepo, getMe, logout } from './api'
 
 const ACTIVE_REPO_KEY = 'kanban_active_repo'
 
 export default function App() {
+  const [user, setUser] = useState(undefined) // undefined = loading, null = not auth
   const [repos, setRepos] = useState([])
   const [activeRepo, setActiveRepo] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [reposLoading, setReposLoading] = useState(true)
 
+  // Check session on mount
   useEffect(() => {
-    getRepos().then(list => {
+    getMe().then(u => {
+      setUser(u)
+      if (u) loadRepos()
+    })
+  }, [])
+
+  async function loadRepos() {
+    setReposLoading(true)
+    try {
+      const list = await getRepos()
       setRepos(list)
-      // Restore last active repo from localStorage
       const saved = localStorage.getItem(ACTIVE_REPO_KEY)
       if (saved) {
         try {
           const parsed = JSON.parse(saved)
           const found = list.find(r => r.owner === parsed.owner && r.repo === parsed.repo)
-          if (found) { setActiveRepo(found); setLoading(false); return }
+          if (found) { setActiveRepo(found); return }
         } catch (_) {}
       }
       if (list.length > 0) setActiveRepo(list[0])
-      setLoading(false)
-    }).catch(() => setLoading(false))
-  }, [])
+    } finally {
+      setReposLoading(false)
+    }
+  }
+
+  const handleLogin = (u) => {
+    setUser(u)
+    loadRepos()
+  }
+
+  const handleLogout = async () => {
+    await logout()
+    setUser(null)
+    setRepos([])
+    setActiveRepo(null)
+    localStorage.removeItem(ACTIVE_REPO_KEY)
+  }
 
   const handleSwitch = (repo) => {
     setActiveRepo(repo)
@@ -43,16 +68,25 @@ export default function App() {
   const handleRemove = async (repo) => {
     try {
       await removeRepo(repo.owner, repo.repo)
-      setRepos(prev => prev.filter(r => !(r.owner === repo.owner && r.repo === repo.repo)))
+      const next = repos.filter(r => !(r.owner === repo.owner && r.repo === repo.repo))
+      setRepos(next)
       if (activeRepo?.owner === repo.owner && activeRepo?.repo === repo.repo) {
-        const remaining = repos.filter(r => !(r.owner === repo.owner && r.repo === repo.repo))
-        setActiveRepo(remaining[0] || null)
+        setActiveRepo(next[0] || null)
       }
-    } catch (err) {
-      console.error('Remove failed:', err)
-    }
+    } catch (err) { console.error('Remove failed:', err) }
   }
 
+  // Loading session check
+  if (user === undefined) {
+    return <div className="app-loading"><div className="spinner" />Checking session…</div>
+  }
+
+  // Not authenticated
+  if (!user) {
+    return <LoginPage onLogin={handleLogin} />
+  }
+
+  // Authenticated
   return (
     <div className="app">
       <header className="app__header">
@@ -67,6 +101,13 @@ export default function App() {
             {activeRepo.owner}/{activeRepo.repo} ↗
           </a>
         )}
+        <div className="app__user">
+          <img src={user.avatar_url} alt={user.login} className="app__avatar" />
+          <span className="app__username">{user.name || user.login}</span>
+          <button className="app__logout" onClick={handleLogout} title="Sign out">
+            Sign out
+          </button>
+        </div>
       </header>
 
       <RepoSelector
@@ -77,14 +118,18 @@ export default function App() {
         onRemove={handleRemove}
       />
 
-      {loading ? (
+      {reposLoading ? (
         <div className="board__loading">Loading…</div>
       ) : !activeRepo ? (
         <div className="board__loading">
-          No repos added. Click <strong>+ Add repo</strong> to get started.
+          No repos added yet. Click <strong>+ Add repo</strong> to get started.
         </div>
       ) : (
-        <Board key={`${activeRepo.owner}/${activeRepo.repo}`} owner={activeRepo.owner} repo={activeRepo.repo} />
+        <Board
+          key={`${activeRepo.owner}/${activeRepo.repo}`}
+          owner={activeRepo.owner}
+          repo={activeRepo.repo}
+        />
       )}
     </div>
   )

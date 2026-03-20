@@ -1,10 +1,12 @@
 import fetch from 'node-fetch'
 
 const BASE = 'https://api.github.com'
-const TOKEN = process.env.GITHUB_TOKEN
 
-const headers = () => ({
-  Authorization: `Bearer ${TOKEN}`,
+// token can be per-user (from session) or fallback to env (for polling)
+const POLLER_TOKEN = process.env.GITHUB_TOKEN
+
+const headers = (token) => ({
+  Authorization: `Bearer ${token || POLLER_TOKEN}`,
   Accept: 'application/vnd.github+json',
   'X-GitHub-Api-Version': '2022-11-28',
   'Content-Type': 'application/json',
@@ -24,11 +26,11 @@ export const COLUMN_LABEL = {
 }
 
 // ── Label bootstrap ──────────────────────────────────────────────────────────
-export async function ensureLabels({ owner, repo }) {
+export async function ensureLabels({ owner, repo, token }) {
   for (const [name, color] of Object.entries(LABEL_COLORS)) {
     try {
       await fetch(`${BASE}/repos/${owner}/${repo}/labels`, {
-        method: 'POST', headers: headers(),
+        method: 'POST', headers: headers(token),
         body: JSON.stringify({ name, color }),
       })
     } catch (_) {}
@@ -36,13 +38,13 @@ export async function ensureLabels({ owner, repo }) {
 }
 
 // ── Issues ───────────────────────────────────────────────────────────────────
-export async function fetchIssues({ owner, repo }) {
+export async function fetchIssues({ owner, repo, token }) {
   let page = 1
   const results = []
   while (true) {
     const res = await fetch(
       `${BASE}/repos/${owner}/${repo}/issues?state=open&per_page=100&page=${page}`,
-      { headers: headers() }
+      { headers: headers(token) }
     )
     if (!res.ok) throw new Error(`GitHub API ${res.status}: ${owner}/${repo}`)
     const issues = await res.json()
@@ -54,39 +56,39 @@ export async function fetchIssues({ owner, repo }) {
   return results
 }
 
-export async function fetchIssueDetail({ owner, repo, number }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, { headers: headers() })
+export async function fetchIssueDetail({ owner, repo, number, token }) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, { headers: headers(token) })
   if (!res.ok) throw new Error(`Fetch issue failed: ${res.status}`)
   return res.json()
 }
 
-export async function createIssue({ owner, repo, title, body = '' }) {
+export async function createIssue({ owner, repo, title, body = '', token }) {
   const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues`, {
-    method: 'POST', headers: headers(),
+    method: 'POST', headers: headers(token),
     body: JSON.stringify({ title, body, labels: ['kanban:todo'] }),
   })
   if (!res.ok) throw new Error(`Create issue failed: ${res.status}`)
   return res.json()
 }
 
-export async function moveIssue({ owner, repo, number, toColumn }) {
+export async function moveIssue({ owner, repo, number, toColumn, token }) {
   const newLabel = COLUMN_LABEL[toColumn]
   if (!newLabel) throw new Error(`Unknown column: ${toColumn}`)
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, { headers: headers() })
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, { headers: headers(token) })
   const issue = await res.json()
   const currentLabels = issue.labels.map(l => l.name)
   const newLabels = [...currentLabels.filter(l => !KANBAN_LABELS.includes(l)), newLabel]
   const updateRes = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, {
-    method: 'PATCH', headers: headers(),
+    method: 'PATCH', headers: headers(token),
     body: JSON.stringify({ labels: newLabels }),
   })
   if (!updateRes.ok) throw new Error(`Move issue failed: ${updateRes.status}`)
   return updateRes.json()
 }
 
-export async function closeIssue({ owner, repo, number }) {
+export async function closeIssue({ owner, repo, number, token }) {
   const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, {
-    method: 'PATCH', headers: headers(),
+    method: 'PATCH', headers: headers(token),
     body: JSON.stringify({ state: 'closed' }),
   })
   if (!res.ok) throw new Error(`Close issue failed: ${res.status}`)
@@ -94,55 +96,55 @@ export async function closeIssue({ owner, repo, number }) {
 }
 
 // ── Comments ─────────────────────────────────────────────────────────────────
-export async function fetchComments({ owner, repo, number }) {
+export async function fetchComments({ owner, repo, number, token }) {
   const res = await fetch(
     `${BASE}/repos/${owner}/${repo}/issues/${number}/comments?per_page=50`,
-    { headers: headers() }
+    { headers: headers(token) }
   )
   if (!res.ok) throw new Error(`Fetch comments failed: ${res.status}`)
   return res.json()
 }
 
-export async function postComment({ owner, repo, number, body }) {
+export async function postComment({ owner, repo, number, body, token }) {
   const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}/comments`, {
-    method: 'POST', headers: headers(), body: JSON.stringify({ body }),
+    method: 'POST', headers: headers(token), body: JSON.stringify({ body }),
   })
   if (!res.ok) throw new Error(`Post comment failed: ${res.status}`)
   return res.json()
 }
 
 // ── Collaborators / Labels ────────────────────────────────────────────────────
-export async function fetchCollaborators({ owner, repo }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/collaborators?per_page=50`, { headers: headers() })
+export async function fetchCollaborators({ owner, repo, token }) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/collaborators?per_page=50`, { headers: headers(token) })
   if (!res.ok) return []
   return res.json()
 }
 
-export async function fetchRepoLabels({ owner, repo }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/labels?per_page=100`, { headers: headers() })
+export async function fetchRepoLabels({ owner, repo, token }) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/labels?per_page=100`, { headers: headers(token) })
   if (!res.ok) return []
   return res.json()
 }
 
-export async function updateAssignees({ owner, repo, number, assignees }) {
+export async function updateAssignees({ owner, repo, number, assignees, token }) {
   const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, {
-    method: 'PATCH', headers: headers(), body: JSON.stringify({ assignees }),
+    method: 'PATCH', headers: headers(token), body: JSON.stringify({ assignees }),
   })
   if (!res.ok) throw new Error(`Update assignees failed: ${res.status}`)
   return res.json()
 }
 
-export async function updateLabels({ owner, repo, number, labels }) {
+export async function updateLabels({ owner, repo, number, labels, token }) {
   const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, {
-    method: 'PATCH', headers: headers(), body: JSON.stringify({ labels }),
+    method: 'PATCH', headers: headers(token), body: JSON.stringify({ labels }),
   })
   if (!res.ok) throw new Error(`Update labels failed: ${res.status}`)
   return res.json()
 }
 
 // ── Repo info ─────────────────────────────────────────────────────────────────
-export async function fetchRepoInfo({ owner, repo }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}`, { headers: headers() })
+export async function fetchRepoInfo({ owner, repo, token }) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}`, { headers: headers(token) })
   if (!res.ok) throw new Error(`Repo not found: ${owner}/${repo} (${res.status})`)
   return res.json()
 }

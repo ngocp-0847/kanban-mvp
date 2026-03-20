@@ -435,3 +435,97 @@ body {
 .repo-add-error {
   color: #f87171; font-size: 0.75rem;
 }
+
+/* ── Auth / Login ───────────────────────────────────────────────────────── */
+.app-loading {
+  display: flex; align-items: center; justify-content: center;
+  gap: 12px; height: 100vh; color: #888; font-size: 0.95rem;
+}
+.spinner {
+  width: 20px; height: 20px;
+  border: 2px solid #e0e0e0;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.login-page {
+  min-height: 100vh;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 60%, #0f3460 100%);
+  padding: 24px;
+}
+.login-card {
+  background: white;
+  border-radius: 16px;
+  padding: 40px 36px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+}
+.login-logo {
+  font-size: 2.5rem; text-align: center; margin-bottom: 8px;
+}
+.login-title {
+  font-size: 1.5rem; font-weight: 700;
+  text-align: center; margin-bottom: 6px;
+}
+.login-sub {
+  font-size: 0.875rem; color: #666;
+  text-align: center; margin-bottom: 28px;
+}
+.login-form { display: flex; flex-direction: column; gap: 16px; }
+.login-field { display: flex; flex-direction: column; gap: 6px; }
+.login-field label { font-size: 0.85rem; font-weight: 600; color: #374151; }
+.login-field input {
+  padding: 10px 14px;
+  border: 1.5px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.15s;
+  font-family: monospace;
+  letter-spacing: 0.05em;
+}
+.login-field input:focus { border-color: #2563eb; }
+.login-error {
+  background: #fef2f2; border: 1px solid #fca5a5;
+  border-radius: 8px; padding: 10px 14px;
+  font-size: 0.85rem; color: #dc2626;
+}
+.login-btn { width: 100%; padding: 12px; font-size: 0.95rem; margin-top: 4px; }
+.login-help { margin-top: 20px; font-size: 0.8rem; color: #888; text-align: center; }
+.login-help a { color: #2563eb; }
+.login-note {
+  margin-top: 8px; font-size: 0.75rem;
+  color: #aaa; line-height: 1.5;
+}
+
+/* ── User in header ─────────────────────────────────────────────────────── */
+.app__user {
+  display: flex; align-items: center; gap: 8px;
+  margin-left: auto;
+}
+.app__avatar {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.3);
+}
+.app__username {
+  font-size: 0.85rem; color: rgba(255,255,255,0.85);
+  max-width: 140px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.app__logout {
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.2);
+  color: rgba(255,255,255,0.7);
+  border-radius: 6px; padding: 4px 10px;
+  font-size: 0.78rem; cursor: pointer;
+  transition: all 0.15s;
+}
+.app__logout:hover {
+  background: rgba(220,38,38,0.7);
+  border-color: transparent; color: white;
+}

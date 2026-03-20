@@ -3,3 +3,6 @@ client/node_modules/
 .env
 dist/
 *.local
+sessions.db
+server/sessions.db
+.env
