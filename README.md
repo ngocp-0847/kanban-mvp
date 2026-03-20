@@ -61,6 +61,19 @@ Drag any card to change its GitHub label. Click the title to open the detail pan
 
 ---
 
+## 🔐 Authentication
+
+Each team member logs in with their own **GitHub Personal Access Token**. Issues and comments created from the board will show that person's GitHub identity.
+
+- Token is validated via GitHub API on login
+- Stored **server-side only** (httpOnly session cookie — never sent to browser JS)
+- 7-day persistent session
+- All GitHub writes (create issue, comment, move) use the logged-in user's token
+
+![Login page](./docs/ss-07-login.png)
+
+> Generate a token with `repo` scope at https://github.com/settings/tokens
+
 ## 🚀 Quick Start
 
 ```bash
