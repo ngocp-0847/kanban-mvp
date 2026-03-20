@@ -1,0 +1,125 @@
+import fetch from 'node-fetch'
+
+const BASE = 'https://api.github.com'
+const { GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO } = process.env
+
+const headers = () => ({
+  Authorization: `Bearer ${GITHUB_TOKEN}`,
+  Accept: 'application/vnd.github+json',
+  'X-GitHub-Api-Version': '2022-11-28',
+  'Content-Type': 'application/json',
+})
+
+const KANBAN_LABELS = ['kanban:todo', 'kanban:in-progress', 'kanban:done']
+const LABEL_COLORS = {
+  'kanban:todo': 'e4e669',
+  'kanban:in-progress': '0075ca',
+  'kanban:done': '0e8a16',
+}
+
+export const COLUMN_LABEL = {
+  todo: 'kanban:todo',
+  'in-progress': 'kanban:in-progress',
+  done: 'kanban:done',
+}
+
+// Ensure kanban labels exist on the repo
+export async function ensureLabels() {
+  for (const [name, color] of Object.entries(LABEL_COLORS)) {
+    try {
+      await fetch(`${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/labels`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ name, color }),
+      })
+    } catch (_) {
+      // Label may already exist — ignore
+    }
+  }
+}
+
+// Fetch all open issues with any kanban label
+export async function fetchIssues() {
+  const results = []
+  for (const label of KANBAN_LABELS) {
+    const res = await fetch(
+      `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues?labels=${encodeURIComponent(label)}&state=open&per_page=100`,
+      { headers: headers() }
+    )
+    if (!res.ok) throw new Error(`GitHub API error: ${res.status}`)
+    const issues = await res.json()
+    for (const issue of issues) {
+      // Avoid duplicates (issue with multiple kanban labels)
+      if (!results.find(i => i.number === issue.number)) {
+        results.push(issue)
+      }
+    }
+  }
+  return results
+}
+
+// Create a new issue + assign kanban:todo label
+export async function createIssue(title, body = '') {
+  const res = await fetch(
+    `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues`,
+    {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ title, body, labels: ['kanban:todo'] }),
+    }
+  )
+  if (!res.ok) throw new Error(`Create issue failed: ${res.status}`)
+  return res.json()
+}
+
+// Move issue to a column by swapping kanban labels
+export async function moveIssue(issueNumber, toColumn) {
+  const newLabel = COLUMN_LABEL[toColumn]
+  if (!newLabel) throw new Error(`Unknown column: ${toColumn}`)
+
+  // Get current labels
+  const res = await fetch(
+    `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issueNumber}`,
+    { headers: headers() }
+  )
+  const issue = await res.json()
+  const currentLabels = issue.labels.map(l => l.name)
+
+  // Remove old kanban labels, add new one
+  const filteredLabels = currentLabels.filter(l => !KANBAN_LABELS.includes(l))
+  const newLabels = [...filteredLabels, newLabel]
+
+  const updateRes = await fetch(
+    `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issueNumber}`,
+    {
+      method: 'PATCH',
+      headers: headers(),
+      body: JSON.stringify({ labels: newLabels }),
+    }
+  )
+  if (!updateRes.ok) throw new Error(`Move issue failed: ${updateRes.status}`)
+  return updateRes.json()
+}
+
+// Close an issue
+export async function closeIssue(issueNumber) {
+  const res = await fetch(
+    `${BASE}/repos/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${issueNumber}`,
+    {
+      method: 'PATCH',
+      headers: headers(),
+      body: JSON.stringify({ state: 'closed' }),
+    }
+  )
+  if (!res.ok) throw new Error(`Close issue failed: ${res.status}`)
+  return res.json()
+}
+
+// Detect which column an issue belongs to
+export function getIssueColumn(issue) {
+  const labels = issue.labels.map(l => l.name)
+  if (labels.includes('kanban:done')) return 'done'
+  if (labels.includes('kanban:in-progress')) return 'in-progress'
+  if (labels.includes('kanban:todo')) return 'todo'
+  return 'todo' // default
+}
