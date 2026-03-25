@@ -27,6 +27,9 @@ import {
   getIssuesFromDb, enqueue, getQueueStats, getRecentLog,
   updateIssueColumn, markIssueClosed,
   snapshotIssue, getIssueHistory, getHistoryVersion, getDb,
+  getChildrenForParent, getParentForChild,
+  upsertRelation, deleteRelation, recalcParentChildrenDone,
+  issueHasParent, getGithubId,
 } from './db.js'
 
 import {
@@ -335,6 +338,113 @@ app.post('/api/repos/:owner/:repo/issues/:id/history/:version/revert', (req, res
 
     res.json({ queued: true, jobId, revertedTo: targetVersion, newVersion })
   } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ── Sub-issues ──────────────────────────────────────────────────────────────────
+
+// GET sub-issues for a parent
+app.get('/api/repos/:owner/:repo/issues/:id/sub-issues', (req, res) => {
+  const repoKey = `${req.params.owner}/${req.params.repo}`
+  const number = Number(req.params.id)
+  const children = getChildrenForParent(repoKey, number)
+  res.json(children.map(c => ({
+    number: c.child_number,
+    title: c.title,
+    state: c.state,
+    column: c.column_name,
+    user: c.user_login,
+    githubId: c.github_id,
+    assignees: JSON.parse(c.assignees || '[]'),
+  })))
+})
+
+// POST create new issue + link as sub-issue (atomic via queue)
+app.post('/api/repos/:owner/:repo/issues/:id/sub-issues', (req, res) => {
+  try {
+    const { title, body } = req.body
+    if (!title) return res.status(400).json({ error: 'title required' })
+    const repoKey = `${req.params.owner}/${req.params.repo}`
+    const parentNumber = Number(req.params.id)
+    const token = getUserToken(req)
+    const userLogin = req.session.user?.login
+
+    // Depth check: parent must not itself be a child
+    if (issueHasParent(repoKey, parentNumber)) {
+      return res.status(422).json({ error: 'Cannot add sub-issues to an issue that is itself a sub-issue (max depth = 1)' })
+    }
+
+    const jobId = enqueue(repoKey, 'create-sub-issue', {
+      parentNumber, title, body, _token: token,
+    }, userLogin)
+    res.status(202).json({ queued: true, jobId, parentNumber, title })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// POST link existing issue as sub-issue
+app.post('/api/repos/:owner/:repo/issues/:id/sub-issues/link', (req, res) => {
+  try {
+    const { childNumber } = req.body
+    if (!childNumber) return res.status(400).json({ error: 'childNumber required' })
+    const repoKey = `${req.params.owner}/${req.params.repo}`
+    const parentNumber = Number(req.params.id)
+    const childNum = Number(childNumber)
+    const token = getUserToken(req)
+    const userLogin = req.session.user?.login
+
+    // Depth checks
+    if (issueHasParent(repoKey, parentNumber)) {
+      return res.status(422).json({ error: 'Parent is itself a sub-issue (max depth = 1)' })
+    }
+    if (issueHasParent(repoKey, childNum)) {
+      return res.status(422).json({ error: 'Issue already has a parent' })
+    }
+
+    // Optimistic: insert relation locally
+    upsertRelation(repoKey, parentNumber, childNum, 'local')
+    recalcParentChildrenDone(repoKey, parentNumber)
+
+    // Broadcast optimistic state
+    const issues = getIssuesFromDb(repoKey)
+    broadcastToClients(repoKey, { type: 'sync', repo: repoKey, issues })
+
+    const subIssueGithubId = getGithubId(repoKey, childNum)
+    const jobId = enqueue(repoKey, 'add-sub-issue', {
+      parentNumber, childNumber: childNum, subIssueGithubId, _token: token,
+    }, userLogin)
+    res.json({ queued: true, jobId, parentNumber, childNumber: childNum })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// DELETE unlink sub-issue
+app.delete('/api/repos/:owner/:repo/issues/:id/sub-issues/:childId', (req, res) => {
+  try {
+    const repoKey = `${req.params.owner}/${req.params.repo}`
+    const parentNumber = Number(req.params.id)
+    const childNum = Number(req.params.childId)
+    const token = getUserToken(req)
+    const userLogin = req.session.user?.login
+
+    // Optimistic: remove relation locally
+    deleteRelation(repoKey, parentNumber, childNum)
+    recalcParentChildrenDone(repoKey, parentNumber)
+
+    const issues = getIssuesFromDb(repoKey)
+    broadcastToClients(repoKey, { type: 'sync', repo: repoKey, issues })
+
+    const subIssueGithubId = getGithubId(repoKey, childNum)
+    const jobId = enqueue(repoKey, 'remove-sub-issue', {
+      parentNumber, childNumber: childNum, subIssueGithubId, _token: token,
+    }, userLogin)
+    res.json({ queued: true, jobId, parentNumber, childNumber: childNum })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// GET parent issue
+app.get('/api/repos/:owner/:repo/issues/:id/parent', (req, res) => {
+  const repoKey = `${req.params.owner}/${req.params.repo}`
+  const number = Number(req.params.id)
+  const parent = getParentForChild(repoKey, number)
+  res.json(parent ? { number: parent.parent_number, title: parent.title } : null)
 })
 
 // ── Queue status / log endpoints ──────────────────────────────────────────────

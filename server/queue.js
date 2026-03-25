@@ -13,12 +13,16 @@ import {
   getPendingJobs, markJobProcessing, markJobDone, markJobFailed,
   updateIssueColumn, markIssueClosed, upsertIssues, insertIssue,
   snapshotIssue, getDb,
+  upsertRelation, deleteRelation, recalcParentChildrenDone, getGithubId,
+  getParentForChild,
 } from './db.js'
 
 import {
   moveIssue, closeIssue, createIssue, postComment,
   updateAssignees, updateLabels, updateIssue,
   fetchIssues, normalizeIssue,
+  addSubIssue, removeSubIssue, createAndLinkSubIssue,
+  fetchIssueDetail,
 } from './github.js'
 
 const TICK_MS = 800          // poll queue every 800ms
@@ -66,6 +70,11 @@ async function processJob(job) {
       case 'move': {
         result = await moveIssue({ ...repoCtx, number: payload.number, toColumn: payload.column })
         updateIssueColumn(job.repo_key, payload.number, payload.column)
+        // If this issue is a child, recalculate parent's children_done
+        const parentInfo = getParentForChild(job.repo_key, payload.number)
+        if (parentInfo) {
+          recalcParentChildrenDone(job.repo_key, parentInfo.parent_number)
+        }
         break
       }
       case 'close': {
@@ -105,6 +114,65 @@ async function processJob(job) {
           UPDATE issues SET title = ?, body = ?, updated_at = datetime('now')
           WHERE repo_key = ? AND number = ?
         `).run(payload.title, payload.body ?? '', job.repo_key, payload.number)
+        break
+      }
+      case 'create-sub-issue': {
+        // Atomic: create issue + link as sub-issue
+        result = await createAndLinkSubIssue({
+          ...repoCtx,
+          parentNumber: payload.parentNumber,
+          title: payload.title,
+          body: payload.body || '',
+        })
+        const newNormalized = normalizeIssue(result)
+        insertIssue(job.repo_key, newNormalized)
+        upsertRelation(job.repo_key, payload.parentNumber, result.number, 'local')
+        recalcParentChildrenDone(job.repo_key, payload.parentNumber)
+        if (result._linkFailed) {
+          // Partial failure — issue created but not linked on GitHub
+          console.warn(`[queue] #${job.id} create-sub-issue: issue created but link failed`)
+        }
+        break
+      }
+      case 'add-sub-issue': {
+        // Fetch github_id on demand if not available
+        let subIssueId = payload.subIssueGithubId
+        if (!subIssueId) {
+          subIssueId = getGithubId(job.repo_key, payload.childNumber)
+        }
+        if (!subIssueId) {
+          // Last resort: fetch from GitHub
+          const detail = await fetchIssueDetail({
+            ...repoCtx, number: payload.childNumber,
+          })
+          subIssueId = detail.id
+          // Cache it
+          getDb().prepare('UPDATE issues SET github_id = ? WHERE repo_key = ? AND number = ?')
+            .run(subIssueId, job.repo_key, payload.childNumber)
+        }
+        result = await addSubIssue({
+          ...repoCtx, number: payload.parentNumber, subIssueId,
+        })
+        upsertRelation(job.repo_key, payload.parentNumber, payload.childNumber, 'local')
+        recalcParentChildrenDone(job.repo_key, payload.parentNumber)
+        break
+      }
+      case 'remove-sub-issue': {
+        let subIssueId = payload.subIssueGithubId
+        if (!subIssueId) {
+          subIssueId = getGithubId(job.repo_key, payload.childNumber)
+        }
+        if (!subIssueId) {
+          const detail = await fetchIssueDetail({
+            ...repoCtx, number: payload.childNumber,
+          })
+          subIssueId = detail.id
+        }
+        result = await removeSubIssue({
+          ...repoCtx, number: payload.parentNumber, subIssueId,
+        })
+        deleteRelation(job.repo_key, payload.parentNumber, payload.childNumber)
+        recalcParentChildrenDone(job.repo_key, payload.parentNumber)
         break
       }
       default:
