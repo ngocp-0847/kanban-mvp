@@ -7,6 +7,7 @@ import {
   updateAssignees, updateLabels, updateIssue,
 } from './api'
 import IssueHistory from './IssueHistory'
+import SubIssueList from './SubIssueList'
 
 // Configure marked
 marked.setOptions({ breaks: true, gfm: true })
@@ -47,7 +48,7 @@ function MarkdownBody({ source }) {
 
 const KANBAN_LABELS = ['kanban:todo', 'kanban:in-progress', 'kanban:done']
 
-export default function IssueDetail({ owner, repo, issueId, onClose }) {
+export default function IssueDetail({ owner, repo, issueId, onClose, onOpenDetail }) {
   const [issue, setIssue] = useState(null)
   const [comments, setComments] = useState([])
   const [collaborators, setCollaborators] = useState([])
@@ -194,6 +195,7 @@ export default function IssueDetail({ owner, repo, issueId, onClose }) {
             <div className="detail-tabs">
               {[
                 { key: 'detail',   label: '📄 Detail' },
+                { key: 'sub-issues', label: '🔗 Sub-Issues' },
                 { key: 'comments', label: `💬 Comments (${comments.length})` },
                 { key: 'history',  label: '🕒 History' },
               ].map(({ key, label }) => (
@@ -289,6 +291,17 @@ export default function IssueDetail({ owner, repo, issueId, onClose }) {
                   </div>
                 </section>
               </div>
+            )}
+
+            {activeTab === 'sub-issues' && (
+              <SubIssueList
+                owner={owner}
+                repo={repo}
+                issueId={issueId}
+                onOpenDetail={(num) => {
+                  if (onOpenDetail) onOpenDetail(num)
+                }}
+              />
             )}
 
             {activeTab === 'history' && (

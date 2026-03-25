@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { Droppable } from '@hello-pangea/dnd'
 import Card from './Card'
 
-export default function Column({ column, issues, onClose, onAddCard, onOpenDetail }) {
+export default function Column({ column, issues, onClose, onAddCard, onOpenDetail, onCreateSubIssue, viewMode }) {
   const [adding, setAdding] = useState(false)
   const [title, setTitle] = useState('')
 
@@ -41,6 +41,8 @@ export default function Column({ column, issues, onClose, onAddCard, onOpenDetai
                 index={index}
                 onClose={onClose}
                 onOpenDetail={onOpenDetail}
+                onCreateSubIssue={onCreateSubIssue}
+                isChild={viewMode === 'nested' && !!issue.parentNumber}
               />
             ))}
             {provided.placeholder}
