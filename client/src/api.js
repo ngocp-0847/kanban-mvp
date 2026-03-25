@@ -198,3 +198,54 @@ export async function getQueueStatus(owner, repo) {
   if (!res.ok) return null
   return res.json()
 }
+
+// ── Sub-issues ──────────────────────────────────────────────────────────────
+
+export async function getSubIssues(owner, repo, id) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${id}/sub-issues`, { credentials: 'include' })
+  if (!res.ok) throw new Error('Failed to fetch sub-issues')
+  return res.json()
+}
+
+export async function createSubIssue(owner, repo, parentId, title, body = '') {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${parentId}/sub-issues`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, body }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || 'Failed to create sub-issue')
+  }
+  return res.json()
+}
+
+export async function linkSubIssue(owner, repo, parentId, childNumber) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${parentId}/sub-issues/link`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ childNumber }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || 'Failed to link sub-issue')
+  }
+  return res.json()
+}
+
+export async function unlinkSubIssue(owner, repo, parentId, childNumber) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${parentId}/sub-issues/${childNumber}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error('Failed to unlink sub-issue')
+  return res.json()
+}
+
+export async function getIssueParent(owner, repo, id) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${id}/parent`, { credentials: 'include' })
+  if (!res.ok) return null
+  return res.json()
+}

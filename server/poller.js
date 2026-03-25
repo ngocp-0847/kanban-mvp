@@ -5,10 +5,19 @@
  * In background: poll GitHub to detect external changes (merged PRs, web edits etc.)
  */
 
-import { fetchIssues, normalizeIssue } from './github.js'
-import { upsertIssues, getIssuesFromDb } from './db.js'
+import { fetchIssues, normalizeIssue, fetchSubIssues } from './github.js'
+import {
+  upsertIssues, getIssuesFromDb,
+  upsertRelation, reconcileRelations,
+  refreshDenormalizedSubIssueData, hasPendingJobs,
+} from './db.js'
 
 const POLL_INTERVAL = 30_000
+const SUB_ISSUE_HYDRATION_CAP = 15  // max parents to hydrate per cycle
+const FULL_REHYDRATE_EVERY = 10     // full re-hydration every N cycles
+
+let _hydrationRunning = false
+let _pollCycleCount = new Map()  // repoKey → cycle count
 
 let clients = new Set()     // all SSE clients
 const repoClients = new Map() // repoKey → Set<res>
@@ -58,12 +67,83 @@ async function pollRepo(repoKey) {
     // Upsert into SQLite
     upsertIssues(repoKey, normalized)
 
-    // Broadcast fresh list
-    broadcast(repoKey, { type: 'sync', repo: repoKey, issues: normalized })
-    console.log(`[poller] ${repoKey}: ${normalized.length} issues`)
+    // Hydrate sub-issue relationships
+    await hydrateSubIssues(repoKey, owner, repo, normalized)
+
+    // Broadcast fresh list (re-read from DB to include denormalized fields)
+    const issues = getIssuesFromDb(repoKey)
+    broadcast(repoKey, { type: 'sync', repo: repoKey, issues })
+    console.log(`[poller] ${repoKey}: ${issues.length} issues`)
   } catch (err) {
     console.error(`[poller] ${repoKey} error:`, err.message)
     broadcast(repoKey, { type: 'error', repo: repoKey, message: err.message })
+  }
+}
+
+/**
+ * Hydrate sub-issue relationships from GitHub.
+ * - Fetches sub-issues for parents with sub_issues_summary.total > 0
+ * - Capped at SUB_ISSUE_HYDRATION_CAP per cycle
+ * - Full re-hydration every FULL_REHYDRATE_EVERY cycles
+ * - Skips if previous hydration still running
+ * - Skips denormalized overwrite if queue has pending jobs
+ */
+async function hydrateSubIssues(repoKey, owner, repo, normalized) {
+  if (_hydrationRunning) return
+  _hydrationRunning = true
+
+  try {
+    const cycleNum = (_pollCycleCount.get(repoKey) || 0) + 1
+    _pollCycleCount.set(repoKey, cycleNum)
+    const isFullCycle = cycleNum % FULL_REHYDRATE_EVERY === 0
+
+    // Find parents that have sub-issues (from sub_issues_summary beta field)
+    let parents = normalized.filter(i =>
+      i.subIssuesSummary && i.subIssuesSummary.total > 0
+    )
+
+    // On full re-hydrate cycles, also include parents we know about from DB
+    if (isFullCycle && parents.length === 0) {
+      // Even without summary field, re-hydrate from existing relations
+      parents = normalized.slice(0, SUB_ISSUE_HYDRATION_CAP)
+    }
+
+    // Cap per cycle
+    parents = parents.slice(0, SUB_ISSUE_HYDRATION_CAP)
+
+    for (const parent of parents) {
+      try {
+        const subIssues = await fetchSubIssues({ owner, repo, number: parent.number })
+        if (subIssues === null) {
+          // Sub-issues API not available for this repo
+          if (cycleNum === 1) console.warn(`[poller] sub-issues API not available for ${repoKey}`)
+          break
+        }
+
+        // Upsert relations
+        const childNumbers = []
+        for (const sub of subIssues) {
+          upsertRelation(repoKey, parent.number, sub.number, 'github')
+          childNumbers.push(sub.number)
+          // Also cache sub-issue data if not already in DB
+          const subNormalized = normalizeIssue(sub)
+          upsertIssues(repoKey, [subNormalized])
+        }
+
+        // Reconcile: remove stale relations not in GitHub response
+        reconcileRelations(repoKey, parent.number, childNumbers)
+      } catch (err) {
+        console.error(`[poller] sub-issue hydration failed for #${parent.number}:`, err.message)
+      }
+    }
+
+    // Refresh denormalized columns — but skip if queue has pending jobs
+    // to avoid overwriting optimistic local updates
+    if (!hasPendingJobs(repoKey)) {
+      refreshDenormalizedSubIssueData(repoKey)
+    }
+  } finally {
+    _hydrationRunning = false
   }
 }
 

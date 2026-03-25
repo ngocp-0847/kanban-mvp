@@ -179,5 +179,58 @@ export function normalizeIssue(issue) {
     labels: issue.labels || [],
     createdAt: issue.created_at,
     updatedAt: issue.updated_at,
+    githubId: issue.id,  // GitHub internal integer ID (needed for sub-issues API)
+    subIssuesSummary: issue.sub_issues_summary || null,
   }
+}
+
+// ── Sub-issues ──────────────────────────────────────────────────────────────
+
+export async function fetchSubIssues({ owner, repo, number, token }) {
+  const res = await fetch(
+    `${BASE}/repos/${owner}/${repo}/issues/${number}/sub_issues?per_page=50`,
+    { headers: headers(token) }
+  )
+  if (res.status === 404 || res.status === 403) return null // sub-issues not available
+  if (!res.ok) throw new Error(`Fetch sub-issues failed: ${res.status}`)
+  return res.json()
+}
+
+export async function addSubIssue({ owner, repo, number, subIssueId, token }) {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}/sub_issues`, {
+    method: 'POST', headers: headers(token),
+    body: JSON.stringify({ sub_issue_id: subIssueId }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.message || `Add sub-issue failed: ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function removeSubIssue({ owner, repo, number, subIssueId, token }) {
+  const res = await fetch(
+    `${BASE}/repos/${owner}/${repo}/issues/${number}/sub_issues/${subIssueId}`,
+    { method: 'DELETE', headers: headers(token) }
+  )
+  if (!res.ok) throw new Error(`Remove sub-issue failed: ${res.status}`)
+  // DELETE may return 204 No Content
+  if (res.status === 204) return {}
+  return res.json()
+}
+
+export async function createAndLinkSubIssue({ owner, repo, parentNumber, title, body = '', token }) {
+  // Step 1: Create the issue
+  const created = await createIssue({ owner, repo, title, body, token })
+
+  // Step 2: Link as sub-issue (use the created issue's internal ID)
+  try {
+    await addSubIssue({ owner, repo, number: parentNumber, subIssueId: created.id, token })
+  } catch (linkErr) {
+    // Partial failure: issue created but not linked
+    console.error(`[github] created #${created.number} but failed to link to #${parentNumber}:`, linkErr.message)
+    return { ...created, _linkFailed: true }
+  }
+
+  return created
 }
