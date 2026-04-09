@@ -2,15 +2,20 @@ import React, { useEffect, useState } from 'react'
 import Board from './Board'
 import RepoSelector from './RepoSelector'
 import LoginPage from './LoginPage'
+import ViewSwitcher from './ViewSwitcher'
+import GanttView from './GanttView'
 import { getRepos, removeRepo, getMe, logout } from './api'
 
 const ACTIVE_REPO_KEY = 'kanban_active_repo'
+const GANTT_ORG = 'framgia'
+const GANTT_PROJECT_NUMBER = 152
 
 export default function App() {
   const [user, setUser] = useState(undefined) // undefined = loading, null = not auth
   const [repos, setRepos] = useState([])
   const [activeRepo, setActiveRepo] = useState(null)
   const [reposLoading, setReposLoading] = useState(true)
+  const [view, setView] = useState('kanban') // 'kanban' | 'gantt'
 
   // Check session on mount
   useEffect(() => {
@@ -91,7 +96,8 @@ export default function App() {
     <div className="app">
       <header className="app__header">
         <h1>🗂 Kanban</h1>
-        {activeRepo && (
+        <ViewSwitcher view={view} onSwitch={setView} />
+        {view === 'kanban' && activeRepo && (
           <a
             href={`https://github.com/${activeRepo.owner}/${activeRepo.repo}/issues`}
             target="_blank"
@@ -99,6 +105,16 @@ export default function App() {
             className="app__repo-link"
           >
             {activeRepo.owner}/{activeRepo.repo} ↗
+          </a>
+        )}
+        {view === 'gantt' && (
+          <a
+            href={`https://github.com/orgs/${GANTT_ORG}/projects/${GANTT_PROJECT_NUMBER}`}
+            target="_blank"
+            rel="noreferrer"
+            className="app__repo-link"
+          >
+            {GANTT_ORG}/projects/{GANTT_PROJECT_NUMBER} ↗
           </a>
         )}
         <div className="app__user">
@@ -110,26 +126,34 @@ export default function App() {
         </div>
       </header>
 
-      <RepoSelector
-        repos={repos}
-        activeRepo={activeRepo}
-        onSwitch={handleSwitch}
-        onAdd={handleAdd}
-        onRemove={handleRemove}
-      />
+      {view === 'kanban' && (
+        <>
+          <RepoSelector
+            repos={repos}
+            activeRepo={activeRepo}
+            onSwitch={handleSwitch}
+            onAdd={handleAdd}
+            onRemove={handleRemove}
+          />
 
-      {reposLoading ? (
-        <div className="board__loading">Loading…</div>
-      ) : !activeRepo ? (
-        <div className="board__loading">
-          No repos added yet. Click <strong>+ Add repo</strong> to get started.
-        </div>
-      ) : (
-        <Board
-          key={`${activeRepo.owner}/${activeRepo.repo}`}
-          owner={activeRepo.owner}
-          repo={activeRepo.repo}
-        />
+          {reposLoading ? (
+            <div className="board__loading">Loading…</div>
+          ) : !activeRepo ? (
+            <div className="board__loading">
+              No repos added yet. Click <strong>+ Add repo</strong> to get started.
+            </div>
+          ) : (
+            <Board
+              key={`${activeRepo.owner}/${activeRepo.repo}`}
+              owner={activeRepo.owner}
+              repo={activeRepo.repo}
+            />
+          )}
+        </>
+      )}
+
+      {view === 'gantt' && (
+        <GanttView org={GANTT_ORG} projectNumber={GANTT_PROJECT_NUMBER} />
       )}
     </div>
   )

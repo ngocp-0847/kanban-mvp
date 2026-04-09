@@ -195,6 +195,25 @@ export async function revertIssue(owner, repo, id, version) {
   return res.json()
 }
 
+// ── Gantt (GitHub Projects v2) ──────────────────────────────────────────────
+
+export async function getGanttData(org, projectNumber) {
+  const res = await fetch(`${BASE}/gantt/projects/${org}/${projectNumber}/items`, {
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error('Failed to fetch Gantt data')
+  return res.json()
+}
+
+export async function refreshGanttData(org, projectNumber) {
+  const res = await fetch(`${BASE}/gantt/projects/${org}/${projectNumber}/refresh`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error('Failed to refresh Gantt data')
+  return res.json()
+}
+
 export async function getQueueStatus(owner, repo) {
   const res = await fetch(`${BASE}/repos/${owner}/${repo}/queue`, { credentials: 'include' })
   if (!res.ok) return null
