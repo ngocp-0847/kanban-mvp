@@ -53,8 +53,7 @@ async function tick() {
 async function processJob(job) {
   const payload = JSON.parse(job.payload)
   const [owner, repo] = job.repo_key.split('/')
-  const token = payload._token // per-user token stored in payload
-  const repoCtx = { owner, repo, token }
+  const repoCtx = { owner, repo }
 
   markJobProcessing(job.id)
   console.log(`[queue] processing #${job.id} ${job.operation} for ${job.repo_key}`)

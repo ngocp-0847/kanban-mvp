@@ -1,17 +1,28 @@
-import fetch from 'node-fetch'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 
-const BASE = 'https://api.github.com'
+const execFileAsync = promisify(execFile)
 
-// token can be per-user (from session) or fallback to env (for polling)
-const POLLER_TOKEN = process.env.GITHUB_TOKEN
+// ── gh CLI wrapper ──────────────────────────────────────────────────────────
+async function execGh(args, opts = {}) {
+  try {
+    const { stdout } = await execFileAsync('gh', args, {
+      timeout: opts.timeout || 15000,
+      maxBuffer: 10 * 1024 * 1024,
+    })
+    return stdout
+  } catch (err) {
+    const msg = err.stderr?.trim() || err.message
+    throw new Error(`gh: ${msg}`)
+  }
+}
 
-const headers = (token) => ({
-  Authorization: `Bearer ${token || POLLER_TOKEN}`,
-  Accept: 'application/vnd.github+json',
-  'X-GitHub-Api-Version': '2022-11-28',
-  'Content-Type': 'application/json',
-})
+async function execGhJson(args, opts) {
+  const stdout = await execGh(args, opts)
+  return JSON.parse(stdout || '[]')
+}
 
+// ── Constants ───────────────────────────────────────────────────────────────
 export const KANBAN_LABELS = ['kanban:todo', 'kanban:in-progress', 'kanban:done']
 const LABEL_COLORS = {
   'kanban:todo': 'e4e669',
@@ -26,139 +37,131 @@ export const COLUMN_LABEL = {
 }
 
 // ── Label bootstrap ──────────────────────────────────────────────────────────
-export async function ensureLabels({ owner, repo, token }) {
+export async function ensureLabels({ owner, repo }) {
   for (const [name, color] of Object.entries(LABEL_COLORS)) {
     try {
-      await fetch(`${BASE}/repos/${owner}/${repo}/labels`, {
-        method: 'POST', headers: headers(token),
-        body: JSON.stringify({ name, color }),
-      })
-    } catch (_) {}
+      await execGh([
+        'api', '-X', 'POST', `repos/${owner}/${repo}/labels`,
+        '-f', `name=${name}`,
+        '-f', `color=${color}`,
+      ])
+    } catch (_) {} // 422 = already exists, ignore
   }
 }
 
 // ── Issues ───────────────────────────────────────────────────────────────────
-export async function fetchIssues({ owner, repo, token }) {
-  let page = 1
-  const results = []
-  while (true) {
-    const res = await fetch(
-      `${BASE}/repos/${owner}/${repo}/issues?state=open&per_page=100&page=${page}`,
-      { headers: headers(token) }
-    )
-    if (!res.ok) throw new Error(`GitHub API ${res.status}: ${owner}/${repo}`)
-    const issues = await res.json()
-    if (!issues.length) break
-    results.push(...issues.filter(i => !i.pull_request))
-    if (issues.length < 100) break
-    page++
-  }
-  return results
+export async function fetchIssues({ owner, repo }) {
+  const stdout = await execGh([
+    'api', `repos/${owner}/${repo}/issues?state=open&per_page=100`,
+    '--paginate',
+  ], { timeout: 30000 })
+
+  if (!stdout.trim()) return []
+  // --paginate concatenates JSON arrays: [...][ ...] → merge into one
+  const merged = stdout.replace(/\]\s*\[/g, ',')
+  const results = JSON.parse(merged)
+  return results.filter(i => !i.pull_request)
 }
 
-export async function fetchIssueDetail({ owner, repo, number, token }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, { headers: headers(token) })
-  if (!res.ok) throw new Error(`Fetch issue failed: ${res.status}`)
-  return res.json()
+export async function fetchIssueDetail({ owner, repo, number }) {
+  return execGhJson(['api', `repos/${owner}/${repo}/issues/${number}`])
 }
 
-export async function createIssue({ owner, repo, title, body = '', token }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues`, {
-    method: 'POST', headers: headers(token),
-    body: JSON.stringify({ title, body, labels: ['kanban:todo'] }),
-  })
-  if (!res.ok) throw new Error(`Create issue failed: ${res.status}`)
-  return res.json()
+export async function createIssue({ owner, repo, title, body = '' }) {
+  return execGhJson([
+    'api', '-X', 'POST', `repos/${owner}/${repo}/issues`,
+    '-f', `title=${title}`,
+    '-f', `body=${body}`,
+    '-f', 'labels[]=kanban:todo',
+  ])
 }
 
-export async function moveIssue({ owner, repo, number, toColumn, token }) {
+export async function moveIssue({ owner, repo, number, toColumn }) {
   const newLabel = COLUMN_LABEL[toColumn]
   if (!newLabel) throw new Error(`Unknown column: ${toColumn}`)
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, { headers: headers(token) })
-  const issue = await res.json()
+
+  // Get current issue to read labels
+  const issue = await execGhJson(['api', `repos/${owner}/${repo}/issues/${number}`])
   const currentLabels = issue.labels.map(l => l.name)
   const newLabels = [...currentLabels.filter(l => !KANBAN_LABELS.includes(l)), newLabel]
-  const updateRes = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, {
-    method: 'PATCH', headers: headers(token),
-    body: JSON.stringify({ labels: newLabels }),
-  })
-  if (!updateRes.ok) throw new Error(`Move issue failed: ${updateRes.status}`)
-  return updateRes.json()
+
+  // Build -f flags for labels array
+  const labelArgs = newLabels.flatMap(l => ['-f', `labels[]=${l}`])
+  return execGhJson([
+    'api', '-X', 'PATCH', `repos/${owner}/${repo}/issues/${number}`,
+    ...labelArgs,
+  ])
 }
 
-export async function closeIssue({ owner, repo, number, token }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, {
-    method: 'PATCH', headers: headers(token),
-    body: JSON.stringify({ state: 'closed' }),
-  })
-  if (!res.ok) throw new Error(`Close issue failed: ${res.status}`)
-  return res.json()
+export async function closeIssue({ owner, repo, number }) {
+  return execGhJson([
+    'api', '-X', 'PATCH', `repos/${owner}/${repo}/issues/${number}`,
+    '-f', 'state=closed',
+  ])
 }
 
 // ── Comments ─────────────────────────────────────────────────────────────────
-export async function fetchComments({ owner, repo, number, token }) {
-  const res = await fetch(
-    `${BASE}/repos/${owner}/${repo}/issues/${number}/comments?per_page=50`,
-    { headers: headers(token) }
-  )
-  if (!res.ok) throw new Error(`Fetch comments failed: ${res.status}`)
-  return res.json()
+export async function fetchComments({ owner, repo, number }) {
+  return execGhJson([
+    'api', `repos/${owner}/${repo}/issues/${number}/comments?per_page=50`,
+  ])
 }
 
-export async function updateIssue({ owner, repo, number, title, body, token }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, {
-    method: 'PATCH', headers: headers(token),
-    body: JSON.stringify({ title, body }),
-  })
-  if (!res.ok) throw new Error(`Update issue failed: ${res.status}`)
-  return res.json()
+export async function updateIssue({ owner, repo, number, title, body }) {
+  const args = [
+    'api', '-X', 'PATCH', `repos/${owner}/${repo}/issues/${number}`,
+    '-f', `title=${title}`,
+  ]
+  if (body !== undefined) args.push('-f', `body=${body}`)
+  return execGhJson(args)
 }
 
-export async function postComment({ owner, repo, number, body, token }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}/comments`, {
-    method: 'POST', headers: headers(token), body: JSON.stringify({ body }),
-  })
-  if (!res.ok) throw new Error(`Post comment failed: ${res.status}`)
-  return res.json()
+export async function postComment({ owner, repo, number, body }) {
+  return execGhJson([
+    'api', '-X', 'POST', `repos/${owner}/${repo}/issues/${number}/comments`,
+    '-f', `body=${body}`,
+  ])
 }
 
 // ── Collaborators / Labels ────────────────────────────────────────────────────
-export async function fetchCollaborators({ owner, repo, token }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/collaborators?per_page=50`, { headers: headers(token) })
-  if (!res.ok) return []
-  return res.json()
+export async function fetchCollaborators({ owner, repo }) {
+  try {
+    return await execGhJson([
+      'api', `repos/${owner}/${repo}/collaborators?per_page=50`,
+    ])
+  } catch (_) { return [] }
 }
 
-export async function fetchRepoLabels({ owner, repo, token }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/labels?per_page=100`, { headers: headers(token) })
-  if (!res.ok) return []
-  return res.json()
+export async function fetchRepoLabels({ owner, repo }) {
+  try {
+    return await execGhJson([
+      'api', `repos/${owner}/${repo}/labels?per_page=100`,
+    ])
+  } catch (_) { return [] }
 }
 
-export async function updateAssignees({ owner, repo, number, assignees, token }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, {
-    method: 'PATCH', headers: headers(token), body: JSON.stringify({ assignees }),
-  })
-  if (!res.ok) throw new Error(`Update assignees failed: ${res.status}`)
-  return res.json()
+export async function updateAssignees({ owner, repo, number, assignees }) {
+  const args = [
+    'api', '-X', 'PATCH', `repos/${owner}/${repo}/issues/${number}`,
+    ...assignees.flatMap(a => ['-f', `assignees[]=${a}`]),
+  ]
+  return execGhJson(args)
 }
 
-export async function updateLabels({ owner, repo, number, labels, token }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${number}`, {
-    method: 'PATCH', headers: headers(token), body: JSON.stringify({ labels }),
-  })
-  if (!res.ok) throw new Error(`Update labels failed: ${res.status}`)
-  return res.json()
+export async function updateLabels({ owner, repo, number, labels }) {
+  const args = [
+    'api', '-X', 'PATCH', `repos/${owner}/${repo}/issues/${number}`,
+    ...labels.flatMap(l => ['-f', `labels[]=${l}`]),
+  ]
+  return execGhJson(args)
 }
 
 // ── Repo info ─────────────────────────────────────────────────────────────────
-export async function fetchRepoInfo({ owner, repo, token }) {
-  const res = await fetch(`${BASE}/repos/${owner}/${repo}`, { headers: headers(token) })
-  if (!res.ok) throw new Error(`Repo not found: ${owner}/${repo} (${res.status})`)
-  return res.json()
+export async function fetchRepoInfo({ owner, repo }) {
+  return execGhJson(['api', `repos/${owner}/${repo}`])
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Helpers (unchanged) ──────────────────────────────────────────────────────
 export function getIssueColumn(issue) {
   const labels = issue.labels.map(l => l.name)
   if (labels.includes('kanban:done')) return 'done'
@@ -176,7 +179,7 @@ export function normalizeIssue(issue) {
     url: issue.html_url,
     user: issue.user?.login,
     assignees: issue.assignees || [],
-    labels: issue.labels || [],
+    labels: (issue.labels || []).map(l => typeof l === 'string' ? l : l.name),
     createdAt: issue.created_at,
     updatedAt: issue.updated_at,
   }

@@ -1,76 +1,72 @@
 /**
- * auth.js — Session-based authentication using GitHub Personal Access Token.
+ * auth.js — Authentication via gh CLI.
  *
- * Flow:
- *   POST /api/auth/login  { token }
- *     → validate token via GET /user on GitHub API
- *     → store { token, user } in server-side session
- *     → return user info (no token sent to client)
- *
- *   GET  /api/auth/me     → return session user or 401
- *   POST /api/auth/logout → destroy session
- *
- * The token lives ONLY in the server-side session (httpOnly cookie).
- * Client JS never sees the raw token.
+ * The server uses the machine-level `gh auth login` credential.
+ * No per-user tokens needed — single-user model.
  */
 
-import fetch from 'node-fetch'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 
-export async function validateToken(token) {
-  const res = await fetch('https://api.github.com/user', {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-    },
-  })
-  if (!res.ok) throw new Error(`GitHub rejected token: ${res.status}`)
-  return res.json() // returns GitHub user object
+const execFileAsync = promisify(execFile)
+
+let _ghUser = null
+
+export async function initAuth() {
+  // Verify gh is authenticated
+  try {
+    await execFileAsync('gh', ['auth', 'status'])
+  } catch (err) {
+    console.error('[auth] gh CLI is not authenticated. Run: gh auth login')
+    process.exit(1)
+  }
+
+  // Cache the authenticated user
+  const { stdout } = await execFileAsync('gh', ['api', '/user'])
+  _ghUser = JSON.parse(stdout)
+  console.log(`[auth] Authenticated as ${_ghUser.login}`)
+  return _ghUser
 }
 
-// Express middleware — rejects unauthenticated requests
+export function getGhUser() {
+  return _ghUser
+}
+
+// Simplified middleware — just check server is authenticated
 export function requireAuth(req, res, next) {
-  if (req.session?.user) return next()
-  res.status(401).json({ error: 'Not authenticated' })
+  if (!_ghUser) return res.status(503).json({ error: 'Server not authenticated' })
+  next()
 }
 
-// Get the per-user token from session (for GitHub API calls)
-export function getUserToken(req) {
-  return req.session?.token
-}
-
-// Mount auth routes on the app
+// Mount auth routes
 export function mountAuthRoutes(app) {
-  // Login — validate token + create session
-  app.post('/api/auth/login', async (req, res) => {
-    const { token } = req.body
-    if (!token) return res.status(400).json({ error: 'token required' })
-    try {
-      const user = await validateToken(token)
-      req.session.token = token
-      req.session.user = {
-        login: user.login,
-        name: user.name,
-        avatar_url: user.avatar_url,
-        email: user.email,
-        html_url: user.html_url,
-      }
-      res.json({ user: req.session.user })
-    } catch (err) {
-      res.status(401).json({ error: err.message })
-    }
-  })
-
-  // Get current user
   app.get('/api/auth/me', (req, res) => {
-    if (!req.session?.user) return res.status(401).json({ error: 'Not authenticated' })
-    res.json({ user: req.session.user })
+    if (!_ghUser) return res.status(401).json({ error: 'Not authenticated' })
+    res.json({
+      user: {
+        login: _ghUser.login,
+        name: _ghUser.name,
+        avatar_url: _ghUser.avatar_url,
+        email: _ghUser.email,
+        html_url: _ghUser.html_url,
+      }
+    })
   })
 
-  // Logout
-  app.post('/api/auth/logout', (req, res) => {
-    req.session.destroy(() => {
-      res.clearCookie('kanban.sid')
-      res.json({ ok: true })
+  app.post('/api/auth/login', (req, res) => {
+    if (!_ghUser) return res.status(503).json({ error: 'gh not authenticated' })
+    res.json({
+      user: {
+        login: _ghUser.login,
+        name: _ghUser.name,
+        avatar_url: _ghUser.avatar_url,
+        email: _ghUser.email,
+        html_url: _ghUser.html_url,
+      }
     })
+  })
+
+  app.post('/api/auth/logout', (req, res) => {
+    res.json({ ok: true })
   })
 }
