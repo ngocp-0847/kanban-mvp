@@ -1,20 +1,12 @@
 import 'dotenv/config'
 import express from 'express'
 import cors from 'cors'
-import session from 'express-session'
 import helmet from 'helmet'
-import { createRequire } from 'module'
-
-// connect-sqlite3 is CommonJS
-const require = createRequire(import.meta.url)
-const SQLiteStore = require('connect-sqlite3')(session)
 
 import {
-  createIssue, moveIssue, closeIssue, ensureLabels,
-  fetchIssueDetail, fetchComments, postComment,
+  fetchIssueDetail, fetchComments,
   fetchCollaborators, fetchRepoLabels,
-  updateAssignees, updateLabels,
-  fetchRepoInfo,
+  ensureLabels, fetchRepoInfo,
 } from './github.js'
 
 import {
@@ -33,11 +25,10 @@ import {
   listRepos, addRepo as storeAdd, removeRepo as storeRemove,
 } from './repos.js'
 
-import { mountAuthRoutes, requireAuth, getUserToken } from './auth.js'
+import { mountAuthRoutes, requireAuth, initAuth, getGhUser } from './auth.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
-const SESSION_SECRET = process.env.SESSION_SECRET || 'kanban-change-this-secret-' + Math.random()
 
 // ── Security ─────────────────────────────────────────────────────────────────
 app.use(helmet({
@@ -51,21 +42,6 @@ app.use(cors({
 
 app.use(express.json())
 
-// ── Sessions (server-side, token never sent to client) ────────────────────────
-app.use(session({
-  name: 'kanban.sid',
-  secret: SESSION_SECRET,
-  resave: false,
-  saveUninitialized: false,
-  store: new SQLiteStore({ db: 'sessions.db', dir: './server' }),
-  cookie: {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-  },
-}))
-
 // ── Auth routes (public) ──────────────────────────────────────────────────────
 mountAuthRoutes(app)
 
@@ -76,7 +52,6 @@ app.use('/api', requireAuth)
 const repoParam = (req) => ({
   owner: req.params.owner,
   repo: req.params.repo,
-  token: getUserToken(req),
 })
 
 // ── SSE ───────────────────────────────────────────────────────────────────────
@@ -97,10 +72,10 @@ app.post('/api/repos', async (req, res) => {
   try {
     const { owner, repo } = req.body
     if (!owner || !repo) return res.status(400).json({ error: 'owner and repo required' })
-    await fetchRepoInfo({ owner, repo, token: getUserToken(req) })
+    await fetchRepoInfo({ owner, repo })
     const result = storeAdd(owner, repo)
     if (result.exists) return res.status(409).json({ error: 'Repo already added' })
-    await ensureLabels({ owner, repo }) // uses POLLER_TOKEN (env)
+    await ensureLabels({ owner, repo })
     pollerAdd(`${owner}/${repo}`)
     res.status(201).json({ owner, repo })
   } catch (err) {
@@ -129,9 +104,8 @@ app.post('/api/repos/:owner/:repo/issues', async (req, res) => {
     const { title, body } = req.body
     if (!title) return res.status(400).json({ error: 'title required' })
     const repoKey = `${req.params.owner}/${req.params.repo}`
-    const token = getUserToken(req)
-    const jobId = enqueue(repoKey, 'create', { title, body, _token: token }, req.session.user?.login)
-    // Optimistic placeholder shown immediately
+    const userLogin = getGhUser()?.login
+    const jobId = enqueue(repoKey, 'create', { title, body }, userLogin)
     res.status(202).json({ queued: true, jobId, title, column: 'todo' })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
@@ -148,7 +122,7 @@ app.patch('/api/repos/:owner/:repo/issues/:id/move', (req, res) => {
     if (!column) return res.status(400).json({ error: 'column required' })
     const repoKey = `${req.params.owner}/${req.params.repo}`
     const number = Number(req.params.id)
-    const token = getUserToken(req)
+    const userLogin = getGhUser()?.login
 
     // Optimistic update in DB immediately (board shows change instantly)
     updateIssueColumn(repoKey, number, column)
@@ -158,7 +132,7 @@ app.patch('/api/repos/:owner/:repo/issues/:id/move', (req, res) => {
     broadcastToClients(repoKey, { type: 'sync', repo: repoKey, issues })
 
     // Enqueue actual GitHub write
-    const jobId = enqueue(repoKey, 'move', { number, column, _token: token }, req.session.user?.login)
+    const jobId = enqueue(repoKey, 'move', { number, column }, userLogin)
 
     res.json({ queued: true, jobId, number, column })
   } catch (err) { res.status(500).json({ error: err.message }) }
@@ -168,14 +142,14 @@ app.patch('/api/repos/:owner/:repo/issues/:id/close', (req, res) => {
   try {
     const repoKey = `${req.params.owner}/${req.params.repo}`
     const number = Number(req.params.id)
-    const token = getUserToken(req)
+    const userLogin = getGhUser()?.login
 
     // Optimistic: remove from cache immediately
     markIssueClosed(repoKey, number)
     const issues = getIssuesFromDb(repoKey)
     broadcastToClients(repoKey, { type: 'sync', repo: repoKey, issues })
 
-    const jobId = enqueue(repoKey, 'close', { number, _token: token }, req.session.user?.login)
+    const jobId = enqueue(repoKey, 'close', { number }, userLogin)
     res.json({ queued: true, jobId, number })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
@@ -191,8 +165,8 @@ app.post('/api/repos/:owner/:repo/issues/:id/comments', (req, res) => {
     if (!body) return res.status(400).json({ error: 'body required' })
     const repoKey = `${req.params.owner}/${req.params.repo}`
     const number = Number(req.params.id)
-    const token = getUserToken(req)
-    const jobId = enqueue(repoKey, 'comment', { number, body, _token: token }, req.session.user?.login)
+    const userLogin = getGhUser()?.login
+    const jobId = enqueue(repoKey, 'comment', { number, body }, userLogin)
     res.status(202).json({ queued: true, jobId })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
@@ -201,8 +175,8 @@ app.patch('/api/repos/:owner/:repo/issues/:id/assignees', (req, res) => {
   try {
     const repoKey = `${req.params.owner}/${req.params.repo}`
     const number = Number(req.params.id)
-    const token = getUserToken(req)
-    const jobId = enqueue(repoKey, 'assignees', { number, assignees: req.body.assignees, _token: token }, req.session.user?.login)
+    const userLogin = getGhUser()?.login
+    const jobId = enqueue(repoKey, 'assignees', { number, assignees: req.body.assignees }, userLogin)
     res.json({ queued: true, jobId })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
@@ -211,8 +185,8 @@ app.patch('/api/repos/:owner/:repo/issues/:id/labels', (req, res) => {
   try {
     const repoKey = `${req.params.owner}/${req.params.repo}`
     const number = Number(req.params.id)
-    const token = getUserToken(req)
-    const jobId = enqueue(repoKey, 'labels', { number, labels: req.body.labels, _token: token }, req.session.user?.login)
+    const userLogin = getGhUser()?.login
+    const jobId = enqueue(repoKey, 'labels', { number, labels: req.body.labels }, userLogin)
     res.json({ queued: true, jobId })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
@@ -229,13 +203,6 @@ app.get('/api/repos/:owner/:repo/labels', async (req, res) => {
 
 // ── Issue edit + history ──────────────────────────────────────────────────────
 
-/**
- * PATCH /api/repos/:owner/:repo/issues/:id
- * Body: { title, body }
- * 1. Snapshot current version to history
- * 2. Update cache optimistically
- * 3. Enqueue GitHub write
- */
 app.patch('/api/repos/:owner/:repo/issues/:id', (req, res) => {
   try {
     const { title, body } = req.body
@@ -243,8 +210,7 @@ app.patch('/api/repos/:owner/:repo/issues/:id', (req, res) => {
 
     const repoKey = `${req.params.owner}/${req.params.repo}`
     const number = Number(req.params.id)
-    const token = getUserToken(req)
-    const userLogin = req.session.user?.login
+    const userLogin = getGhUser()?.login
 
     // Get current state from DB for snapshot
     const current = getDb().prepare(
@@ -268,16 +234,12 @@ app.patch('/api/repos/:owner/:repo/issues/:id', (req, res) => {
     broadcastToClients(repoKey, { type: 'sync', repo: repoKey, issues })
 
     // Enqueue GitHub write
-    const jobId = enqueue(repoKey, 'update', { number, title, body, _token: token }, userLogin)
+    const jobId = enqueue(repoKey, 'update', { number, title, body }, userLogin)
 
     res.json({ queued: true, jobId, version })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 
-/**
- * GET /api/repos/:owner/:repo/issues/:id/history
- * Returns version list (newest first), without full body (use /history/:ver for diff)
- */
 app.get('/api/repos/:owner/:repo/issues/:id/history', requireAuth, (req, res) => {
   const repoKey = `${req.params.owner}/${req.params.repo}`
   const number = Number(req.params.id)
@@ -285,17 +247,12 @@ app.get('/api/repos/:owner/:repo/issues/:id/history', requireAuth, (req, res) =>
   res.json(history)
 })
 
-/**
- * POST /api/repos/:owner/:repo/issues/:id/history/:version/revert
- * Reverts to a specific version (creates new edit, snapshots current first)
- */
 app.post('/api/repos/:owner/:repo/issues/:id/history/:version/revert', (req, res) => {
   try {
     const repoKey = `${req.params.owner}/${req.params.repo}`
     const number = Number(req.params.id)
     const targetVersion = Number(req.params.version)
-    const token = getUserToken(req)
-    const userLogin = req.session.user?.login
+    const userLogin = getGhUser()?.login
 
     // Find target version
     const target = getHistoryVersion(repoKey, number, targetVersion)
@@ -330,7 +287,7 @@ app.post('/api/repos/:owner/:repo/issues/:id/history/:version/revert', (req, res
 
     // Enqueue GitHub write
     const jobId = enqueue(repoKey, 'update', {
-      number, title: target.title, body: target.body, _token: token,
+      number, title: target.title, body: target.body,
     }, userLogin)
 
     res.json({ queued: true, jobId, revertedTo: targetVersion, newVersion })
@@ -348,12 +305,10 @@ app.get('/api/repos/:owner/:repo/queue', requireAuth, (req, res) => {
 
 // ── Start ──────────────────────────────────────────────────────────────────────
 async function start() {
-  if (!process.env.GITHUB_TOKEN) {
-    console.error('[server] GITHUB_TOKEN missing in .env (used for polling/label creation)')
-    process.exit(1)
-  }
+  // Verify gh CLI is authenticated (replaces GITHUB_TOKEN check)
+  await initAuth()
 
-  // Init sync queue worker (passes broadcast fn so it can push SSE on job completion)
+  // Init sync queue worker
   initQueue(broadcastToClients)
 
   const repos = listRepos()

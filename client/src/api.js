@@ -20,9 +20,9 @@ export async function getRepos() {
 }
 
 export async function addRepo(owner, repo) {
-  const res = await fetch(`${
-    credentials: 'include',BASE}/repos`, {
+  const res = await fetch(`${BASE}/repos`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ owner, repo }),
   })
@@ -32,8 +32,10 @@ export async function addRepo(owner, repo) {
 }
 
 export async function removeRepo(owner, repo) {
-  const res = await fetch(`${
-    credentials: 'include',BASE}/repos/${owner}/${repo}`, { method: 'DELETE' })
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
   if (!res.ok) throw new Error('Failed to remove repo')
   return res.json()
 }
@@ -50,9 +52,9 @@ export async function getIssues(owner, repo) {
 }
 
 export async function createIssue(owner, repo, title, body = '') {
-  const res = await fetch(`${
-    credentials: 'include',BASE}/repos/${owner}/${repo}/issues`, {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title, body }),
   })
@@ -61,9 +63,9 @@ export async function createIssue(owner, repo, title, body = '') {
 }
 
 export async function moveIssue(owner, repo, id, column) {
-  const res = await fetch(`${
-    credentials: 'include',BASE}/repos/${owner}/${repo}/issues/${id}/move`, {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${id}/move`, {
     method: 'PATCH',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ column }),
   })
@@ -72,9 +74,9 @@ export async function moveIssue(owner, repo, id, column) {
 }
 
 export async function closeIssue(owner, repo, id) {
-  const res = await fetch(`${
-    credentials: 'include',BASE}/repos/${owner}/${repo}/issues/${id}/close`, {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${id}/close`, {
     method: 'PATCH',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
   })
   if (!res.ok) throw new Error('Failed to close issue')
@@ -94,9 +96,9 @@ export async function getComments(owner, repo, id) {
 }
 
 export async function postComment(owner, repo, id, body) {
-  const res = await fetch(`${
-    credentials: 'include',BASE}/repos/${owner}/${repo}/issues/${id}/comments`, {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${id}/comments`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ body }),
   })
@@ -105,9 +107,9 @@ export async function postComment(owner, repo, id, body) {
 }
 
 export async function updateAssignees(owner, repo, id, assignees) {
-  const res = await fetch(`${
-    credentials: 'include',BASE}/repos/${owner}/${repo}/issues/${id}/assignees`, {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${id}/assignees`, {
     method: 'PATCH',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ assignees }),
   })
@@ -116,9 +118,9 @@ export async function updateAssignees(owner, repo, id, assignees) {
 }
 
 export async function updateLabels(owner, repo, id, labels) {
-  const res = await fetch(`${
-    credentials: 'include',BASE}/repos/${owner}/${repo}/issues/${id}/labels`, {
+  const res = await fetch(`${BASE}/repos/${owner}/${repo}/issues/${id}/labels`, {
     method: 'PATCH',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ labels }),
   })
