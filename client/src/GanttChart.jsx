@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react'
-import { Gantt } from 'gantt-task-react'
+import { Gantt, ViewMode } from 'gantt-task-react'
 import 'gantt-task-react/dist/index.css'
 
 const STATUS_COLORS = {
@@ -18,6 +18,8 @@ const STATUS_COLORS = {
 const DEFAULT_COLOR = { bar: '#cbd5e1', progress: '#94a3b8' }
 const SPRINT_COLOR = { bar: '#e2e8f0', progress: '#64748b' }
 
+const INDENT = { sprint: 0, story: 16, feature: 32, task: 48 }
+
 function getTaskColor(node) {
   if (node.category === 'sprint') return SPRINT_COLOR
   return STATUS_COLORS[node.status] || DEFAULT_COLOR
@@ -31,21 +33,20 @@ function toDate(dateStr) {
 
 /**
  * Flatten the tree into gantt-task-react Task[] format.
- * Only includes nodes that have valid start/end dates.
  */
 function flattenTree(tree, selectedSprint) {
   const tasks = []
 
   for (const sprint of tree) {
-    if (selectedSprint && sprint.name !== selectedSprint && sprint.name !== 'Unscheduled') continue
+    if (selectedSprint && sprint.name !== selectedSprint) continue
+    // Skip "Unscheduled" when showing all sprints — too noisy with old dates
+    if (!selectedSprint && sprint.name === 'Unscheduled') continue
 
     const sprintStart = toDate(sprint.start)
     const sprintEnd = toDate(sprint.end)
-
-    // Calculate sprint date range from children if no dates
     const { minDate, maxDate } = getDateRange(sprint.children, sprintStart, sprintEnd)
 
-    if (!minDate || !maxDate) continue // skip sprints with no dates at all
+    if (!minDate || !maxDate) continue
 
     tasks.push({
       id: sprint.id,
@@ -61,7 +62,6 @@ function flattenTree(tree, selectedSprint) {
         backgroundSelectedColor: SPRINT_COLOR.bar,
         progressSelectedColor: SPRINT_COLOR.progress,
       },
-      // store original data for click handler
       _data: sprint,
     })
 
@@ -77,9 +77,7 @@ function flattenChildren(children, parentId, fallbackStart, fallbackEnd, tasks) 
     const end = toDate(node.end) || fallbackEnd
     if (!start || !end) continue
 
-    // Ensure end >= start
-    const safeEnd = end < start ? start : end
-
+    const safeEnd = end < start ? new Date(start.getTime() + 86400000) : end
     const isGroup = node.children && node.children.length > 0
     const color = getTaskColor(node)
 
@@ -111,11 +109,9 @@ function flattenChildren(children, parentId, fallbackStart, fallbackEnd, tasks) 
 }
 
 function formatName(node) {
-  // Shorten the title by removing type prefixes
   let name = node.name || ''
   name = name.replace(/^\[(STORY|story|Feature|feature|DEV FEATURE|DEV TASK|Task|task|devtask|TEST DESIGN|QA BUG|Bug)\]\s*/i, '')
-  // Trim to reasonable length
-  if (name.length > 60) name = name.slice(0, 57) + '...'
+  if (name.length > 80) name = name.slice(0, 77) + '...'
   return name
 }
 
@@ -128,14 +124,16 @@ function getDateRange(children, defaultMin, defaultMax) {
     const e = toDate(child.end)
     if (s && (!minDate || s < minDate)) minDate = s
     if (e && (!maxDate || e > maxDate)) maxDate = e
-
-    // Recurse into grandchildren
     const nested = getDateRange(child.children, null, null)
     if (nested.minDate && (!minDate || nested.minDate < minDate)) minDate = nested.minDate
     if (nested.maxDate && (!maxDate || nested.maxDate > maxDate)) maxDate = nested.maxDate
   }
 
   return { minDate, maxDate }
+}
+
+function formatDate(d) {
+  return d.toLocaleDateString('en-CA') // YYYY-MM-DD
 }
 
 export default function GanttChart({ tree, viewMode, selectedSprint, onTaskClick }) {
@@ -152,24 +150,67 @@ export default function GanttChart({ tree, viewMode, selectedSprint, onTaskClick
     )
   }
 
+  const colWidth = viewMode === ViewMode.Day ? 50
+    : viewMode === ViewMode.Week ? 180
+    : 300
+
   return (
     <div className="gantt-chart">
       <Gantt
         tasks={tasks}
         viewMode={viewMode}
-        listCellWidth="320px"
-        columnWidth={viewMode === 'Day' ? 60 : viewMode === 'Week' ? 150 : 300}
-        rowHeight={36}
-        barCornerRadius={4}
+        listCellWidth=""
+        columnWidth={colWidth}
+        rowHeight={40}
+        headerHeight={50}
+        barCornerRadius={3}
+        barFill={70}
         fontSize="12"
-        todayColor="rgba(59, 130, 246, 0.1)"
+        todayColor="rgba(59, 130, 246, 0.12)"
         onClick={task => {
-          if (task._data?.url) {
-            window.open(task._data.url, '_blank')
-          }
+          if (task._data?.url) window.open(task._data.url, '_blank')
           onTaskClick?.(task._data)
         }}
         TooltipContent={({ task }) => <TaskTooltip task={task} />}
+        TaskListHeader={({ headerHeight }) => (
+          <div className="gtl-header" style={{ height: headerHeight }}>
+            <span className="gtl-header__name">Task</span>
+            <span className="gtl-header__date">Start</span>
+            <span className="gtl-header__date">End</span>
+          </div>
+        )}
+        TaskListTable={({ tasks, rowHeight, onExpanderClick }) => (
+          <div className="gtl">
+            {tasks.map(task => {
+              const cat = task._data?.category || 'task'
+              const indent = INDENT[cat] ?? 48
+              return (
+                <div
+                  key={task.id}
+                  className={`gtl-row gtl-row--${cat}`}
+                  style={{ height: rowHeight }}
+                >
+                  <span className="gtl-row__name" style={{ paddingLeft: indent }}>
+                    {task.type === 'project' && (
+                      <button
+                        className="gtl-row__toggle"
+                        onClick={() => onExpanderClick(task)}
+                      >
+                        {task.hideChildren ? '▶' : '▼'}
+                      </button>
+                    )}
+                    <span className={`gtl-row__badge gtl-row__badge--${cat}`}>
+                      {cat === 'sprint' ? 'S' : cat === 'story' ? 'ST' : cat === 'feature' ? 'F' : 'T'}
+                    </span>
+                    <span className="gtl-row__text" title={task.name}>{task.name}</span>
+                  </span>
+                  <span className="gtl-row__date">{formatDate(task.start)}</span>
+                  <span className="gtl-row__date">{formatDate(task.end)}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
       />
     </div>
   )

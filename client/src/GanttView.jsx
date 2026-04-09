@@ -22,6 +22,11 @@ export default function GanttView({ org, projectNumber }) {
     try {
       const result = await getGanttData(org, projectNumber)
       setData(result)
+      // Auto-select first active sprint on initial load
+      if (!selectedSprint && result?.iterations) {
+        const active = result.iterations.find(it => !it.completed)
+        if (active) setSelectedSprint(active.title)
+      }
     } catch (err) {
       setError(err.message)
     } finally {
