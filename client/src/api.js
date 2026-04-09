@@ -2,10 +2,14 @@ const BASE = '/api'
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 export async function getMe() {
-  const res = await fetch('/api/auth/me', { credentials: 'include' })
-  if (res.status === 401) return null
-  const data = await res.json()
-  return data.user || null
+  try {
+    const res = await fetch('/api/auth/me', { credentials: 'include' })
+    if (!res.ok) return null
+    const data = await res.json()
+    return data.user || null
+  } catch (_) {
+    return null
+  }
 }
 
 export async function logout() {
@@ -192,6 +196,25 @@ export async function revertIssue(owner, repo, id, version) {
     { method: 'POST', credentials: 'include' }
   )
   if (!res.ok) throw new Error('Failed to revert')
+  return res.json()
+}
+
+// ── Gantt (GitHub Projects v2) ──────────────────────────────────────────────
+
+export async function getGanttData(org, projectNumber) {
+  const res = await fetch(`${BASE}/gantt/projects/${org}/${projectNumber}/items`, {
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error('Failed to fetch Gantt data')
+  return res.json()
+}
+
+export async function refreshGanttData(org, projectNumber) {
+  const res = await fetch(`${BASE}/gantt/projects/${org}/${projectNumber}/refresh`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error('Failed to refresh Gantt data')
   return res.json()
 }
 

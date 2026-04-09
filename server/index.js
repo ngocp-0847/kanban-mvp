@@ -26,6 +26,7 @@ import {
 } from './repos.js'
 
 import { mountAuthRoutes, requireAuth, initAuth, getGhUser } from './auth.js'
+import { getGanttData } from './gantt.js'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -291,6 +292,34 @@ app.post('/api/repos/:owner/:repo/issues/:id/history/:version/revert', (req, res
     }, userLogin)
 
     res.json({ queued: true, jobId, revertedTo: targetVersion, newVersion })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+// ── Gantt (GitHub Projects v2) ───────────────────────────────────────────────
+app.get('/api/gantt/projects/:org/:number', async (req, res) => {
+  try {
+    const { meta } = await getGanttData(req.params.org, Number(req.params.number))
+    res.json(meta)
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.get('/api/gantt/projects/:org/:number/items', async (req, res) => {
+  try {
+    const data = await getGanttData(req.params.org, Number(req.params.number))
+    res.json({
+      project: { org: req.params.org, number: Number(req.params.number), title: data.meta.title },
+      iterations: data.meta.iterations,
+      statusOptions: data.meta.statusOptions,
+      tree: data.tree,
+      flatItems: data.items,
+    })
+  } catch (err) { res.status(500).json({ error: err.message }) }
+})
+
+app.post('/api/gantt/projects/:org/:number/refresh', async (req, res) => {
+  try {
+    const data = await getGanttData(req.params.org, Number(req.params.number), true)
+    res.json({ ok: true, itemCount: data.items.length })
   } catch (err) { res.status(500).json({ error: err.message }) }
 })
 

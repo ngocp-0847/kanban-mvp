@@ -89,6 +89,15 @@ function migrate(db) {
       user_login    TEXT,
       created_at    TEXT DEFAULT (datetime('now'))
     );
+
+    -- Gantt project cache — cached GitHub Projects v2 data
+    CREATE TABLE IF NOT EXISTS gantt_project_cache (
+      project_key   TEXT PRIMARY KEY,          -- "org/number"
+      meta_json     TEXT,
+      items_json    TEXT,
+      tree_json     TEXT,
+      fetched_at    TEXT DEFAULT (datetime('now'))
+    );
   `)
 }
 
